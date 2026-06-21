@@ -1,0 +1,13 @@
+{
+  "name": "taropi-permissions",
+  "version": "0.1.0",
+  "description": "TaroPi 工具权限管控: 读/写/bash 分级控制，外部写入二次确认，敏感文件保护",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

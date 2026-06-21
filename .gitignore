@@ -141,3 +141,12 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# IDE / AI agent configs
+.claude/
+.agents/
+
+# pi coding agent (project-local)
+.pi/sessions/
+.pi/tmp/
+.pi/logs/

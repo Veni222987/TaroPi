@@ -1,0 +1,13 @@
+{
+  "name": "taropi-base",
+  "version": "0.1.0",
+  "description": "TaroPi 基础扩展: 中文回答 + debugger/developer sub-agent",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
