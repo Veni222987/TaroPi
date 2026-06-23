@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { resolve, relative, basename } from "node:path";
+import { resolve, relative } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
@@ -52,7 +52,7 @@ const DEFAULT_CONFIG: PermissionsConfig = {
     // .git/** 仅限写/编辑，读取允许（如 git log 内部访问）
     { tool: ["write", "edit"], pattern: ".git/**" },
     // 禁止直接删除文件，改为移入回收站
-    { tool: "bash", pattern: "rm *", reason: "禁止使用 rm 删除文件。请将文件移动到当前工作目录的 .trash 文件夹下（mkdir -p .trash && mv <文件> .trash/）。" },
+    { tool: "bash", pattern: "rm *", reason: "禁止使用 rm 删除文件。请将文件移动到当前工作目录的 .trash 文件夹下（mkdir -p .trash && mv <target> .trash/）。" },
   ],
 };
 
@@ -107,37 +107,30 @@ function normalizePath(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
+/** glob 转正则（支持 ** 和 *），** 匹配含 / 的任意路径，* 匹配单层文件名 */
+function globToRegex(pattern: string): RegExp {
+  let regex = "";
+  let i = 0;
+  while (i < pattern.length) {
+    if (pattern[i] === "*" && pattern[i + 1] === "*") {
+      regex += ".*";
+      i += 2;
+    } else if (pattern[i] === "*") {
+      regex += "[^/]*";
+      i++;
+    } else {
+      regex += pattern[i].replace(/[.+^${}()|[\]\\]/g, "\\$&");
+      i++;
+    }
+  }
+  return new RegExp("^" + regex + "$");
+}
+
 /** 简单 glob 匹配：只支持 ** 和 * 通配符 */
 function matchGlob(input: string, pattern: string): boolean {
   const s = normalizePath(input);
   const p = normalizePath(pattern);
-
-  if (p.includes("**")) {
-    const idx = p.indexOf("**");
-    const prefix = p.slice(0, idx);
-    const suffix = p.slice(idx + 2);
-    if (prefix === "") {
-      return s.endsWith(suffix) || s.includes(suffix + "/") || s === suffix.slice(1);
-    } else if (suffix === "") {
-      return s.startsWith(prefix) || s === prefix;
-    } else {
-      return s.startsWith(prefix) && s.endsWith(suffix) && s.length >= prefix.length + suffix.length;
-    }
-  }
-
-  if (!p.includes("/")) {
-    return matchWildcard(basename(s), p);
-  }
-
-  return s.endsWith("/" + p) || s === p;
-}
-
-/** 通配符匹配（仅支持 *） */
-function matchWildcard(name: string, wildcard: string): boolean {
-  const regex = new RegExp(
-    "^" + wildcard.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$"
-  );
-  return regex.test(name);
+  return globToRegex(p).test(s);
 }
 
 /**
