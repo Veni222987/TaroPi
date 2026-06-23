@@ -293,8 +293,9 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`🔒 禁止执行命令: ${command.slice(0, 60)}`, "error");
         return { block: true, reason: rule.reason };
       }
-      const externalPaths = extractPathsFromCommand(command);
-      if ((externalPaths.length > 0 || !isSafeBashCommand(command, ctx.cwd)) && config.externalWriteConfirm) {
+      const allPaths = extractPathsFromCommand(command);
+      const externalPaths = allPaths.filter((p) => !isInsideCwd(resolve(p), ctx.cwd));
+      if (externalPaths.length > 0 && config.externalWriteConfirm) {
         const ok = await ctx.ui.confirm(
           "⚠️ Bash 命令确认",
           `Agent 执行命令:\n\n  ${command.slice(0, 200)}${command.length > 200 ? "..." : ""}\n\n可能涉及 cwd 外部路径，允许执行？`
@@ -306,9 +307,3 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-/** 简单的 bash 安全检查 */
-function isSafeBashCommand(command: string, cwd: string): boolean {
-  const paths = extractPathsFromCommand(command);
-  if (paths.length === 0) return true;
-  return paths.every((p) => isInsideCwd(resolve(p), cwd));
-}
