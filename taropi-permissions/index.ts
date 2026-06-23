@@ -138,16 +138,14 @@ function matchGlob(input: string, pattern: string): boolean {
 /**
  * 命令前缀 / 通配符匹配：
  * - 无 * 时做前缀匹配，`mycli dosth` 能匹配 `mycli dosth --flag`
- * - 含 * 时对完整命令做 glob 匹配，`mycli *` 匹配所有 mycli 子命令
+ * - 含 * 时匹配命令开头或 && / ; / | 分隔符之后，`rm *` 也能匹配 `cd x && rm y`
  */
 function matchCommandPattern(command: string, pattern: string): boolean {
   const cmd = command.trim();
   const pat = pattern.trim();
   if (pat.includes("*")) {
-    const regex = new RegExp(
-      "^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$"
-    );
-    return regex.test(cmd);
+    const body = pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp("(?:^|[;&|]\\s*)" + body).test(cmd);
   }
   return cmd === pat || cmd.startsWith(pat + " ") || cmd.startsWith(pat + "\t");
 }
