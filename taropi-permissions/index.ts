@@ -74,21 +74,23 @@ function deepMerge<T extends Record<string, any>>(base: T, overrides: Partial<T>
 }
 
 function loadConfig(): PermissionsConfig {
+  let merged = DEFAULT_CONFIG;
   try {
     if (existsSync(CONFIG_PATH)) {
       const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-      return deepMerge(DEFAULT_CONFIG, raw);
+      merged = deepMerge(DEFAULT_CONFIG, raw);
     }
   } catch {
     // 配置损坏，降级到默认
   }
+  // 始终写回，确保新增默认规则自动注入磁盘配置
   try {
     mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-    writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2), "utf-8");
+    writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), "utf-8");
   } catch {
     // 写入失败，静默降级
   }
-  return DEFAULT_CONFIG;
+  return merged;
 }
 
 // ── 规则匹配 ──────────────────────────────────────────────
