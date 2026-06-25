@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
@@ -19,107 +20,51 @@ function loadStyleReference(type: DiagramType): string {
   }
 }
 
-// ── OpenAI API 调用 ─────────────────────────────────────────
+// ── 动态读取环境变量（问题 1）──────────────────────────────
+// process.env 在 pi 启动时快照，source ~/.bashrc 对已运行进程无效。
+// 此函数优先读进程环境，缺失时 fork shell 动态求值，并缓存回 process.env。
 
-async function callGPT4oImage(
-  apiKey: string,
-  baseUrl: string,
-  prompt: string,
-  imageB64: string,
-): Promise<string | null> {
-  // 先尝试 responses API（支持 image_generation tool）
+function resolveEnv(key: string): string {
+  if (process.env[key]) return process.env[key]!;
   try {
-    const resp = await fetch(`${baseUrl}/responses`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-4o-2024-11-20",
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: `data:image/png;base64,${imageB64}` },
-            ],
-          },
-        ],
-        tools: [{ type: "image_generation" }],
-        output: { type: "image", format: "png" },
-      }),
-    });
-    if (resp.ok) {
-      const data = (await resp.json()) as any;
-      const url = data?.output?.content?.[0]?.image_url;
-      if (url) return url;
-    }
+    const val = execSync(`bash -i -c 'echo $${key}' 2>/dev/null`, {
+      encoding: "utf-8",
+      timeout: 3000,
+    }).trim();
+    if (val) process.env[key] = val; // 缓存，避免重复 fork
+    return val;
   } catch {
-    // 降级到 chat completions
+    return "";
   }
-
-  // 降级：chat completions + image_generation tool
-  const resp2 = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "gpt-4o-2024-11-20",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `${prompt}\n\n请分析草图并调用 image_generation 工具生成架构图。`,
-            },
-            { type: "image_url", image_url: `data:image/png;base64,${imageB64}` },
-          ],
-        },
-      ],
-      tools: [{ type: "image_generation" }],
-      tool_choice: "auto",
-    }),
-  });
-  if (resp2.ok) {
-    const data2 = (await resp2.json()) as any;
-    for (const tc of data2?.choices?.[0]?.message?.tool_calls ?? []) {
-      if (tc?.type === "image_generation") return tc.image_generation?.image_url ?? null;
-    }
-  }
-  return null;
 }
 
-async function callDallE3(
+// ── API 调用 ────────────────────────────────────────────────
+
+async function callGptImage2(
   apiKey: string,
   baseUrl: string,
   prompt: string,
   size: string,
-): Promise<string | null> {
+  model: string,
+): Promise<string> {
   const resp = await fetch(`${baseUrl}/images/generations`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "dall-e-3",
-      prompt,
-      n: 1,
-      size,
-      response_format: "url",
-    }),
+    body: JSON.stringify({ model, prompt, n: 1, size }),
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(`DALL-E 3 API 错误 ${resp.status}: ${text.slice(0, 200)}`);
+    throw new Error(`${model} API 错误 ${resp.status}: ${text.slice(0, 300)}`);
   }
   const data = (await resp.json()) as any;
-  return data?.data?.[0]?.url ?? null;
+  const b64 = data?.data?.[0]?.b64_json;
+  if (!b64) throw new Error(`${model} 未返回图片数据，响应: ${JSON.stringify(data).slice(0, 300)}`);
+  return `data:image/png;base64,${b64}`;
 }
 
 // ── 参数 Schema ─────────────────────────────────────────────
 
 const DrawParams = Type.Object({
-  input: Type.Optional(
-    Type.String({
-      description: "手绘草图路径（gpt-4o-image 必填；dall-e-3 忽略此参数）",
-    }),
-  ),
   type: Type.Optional(
     Type.String({
       description:
@@ -128,7 +73,13 @@ const DrawParams = Type.Object({
   ),
   model: Type.Optional(
     Type.String({
-      description: "生成模型：gpt-4o-image（图生图，默认）| dall-e-3（文生图）",
+      description: "生成模型，默认 gpt-image-2；可传入任意兼容 /images/generations 的模型名",
+    }),
+  ),
+  size: Type.Optional(
+    Type.String({
+      description:
+        "输出尺寸（gpt-image-2）：1024x1024（默认）| 1536x1024 | 1024x1536 | auto",
     }),
   ),
   output: Type.Optional(
@@ -141,10 +92,14 @@ const DrawParams = Type.Object({
       description: "额外的风格或内容要求，叠加在内置风格参考之上",
     }),
   ),
-  size: Type.Optional(
+  apiKey: Type.Optional(
     Type.String({
-      description:
-        "输出尺寸（仅 dall-e-3 生效）：1792x1024（默认）| 1024x1024 | 1024x1792",
+      description: "临时覆盖 OPENAI_API_KEY，不填则读环境变量（问题 3）",
+    }),
+  ),
+  baseUrl: Type.Optional(
+    Type.String({
+      description: "临时覆盖 OPENAI_BASE_URL，不填则读环境变量（问题 3）",
     }),
   ),
 });
@@ -156,33 +111,52 @@ export default function (pi: ExtensionAPI) {
     name: "draw",
     label: "Draw",
     description:
-      "根据手绘草图或文字描述，调用 AI 生成专业架构图 (PNG)。" +
+      "根据文字描述，调用 gpt-image-2 生成专业架构图 (PNG)。" +
       "支持 architecture / dataflow / deployment 三种类型，" +
-      "需要 OPENAI_API_KEY 环境变量。",
+      "需要 OPENAI_API_KEY 环境变量（或通过 apiKey 参数临时传入）。",
     parameters: DrawParams,
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const apiKey = process.env.OPENAI_API_KEY;
+    async execute(_toolCallId, params, _signal, onUpdate, ctx) {
+      // ── 解析 API 凭证（问题 1 & 3）──────────────────────
+      const apiKey = params.apiKey || resolveEnv("OPENAI_API_KEY");
+      const baseUrl = (
+        params.baseUrl ||
+        resolveEnv("OPENAI_BASE_URL") ||
+        "https://api.openai.com/v1"
+      ).replace(/\/$/, "");
+
       if (!apiKey) {
         return {
-          content: [{ type: "text", text: "错误：未设置 OPENAI_API_KEY 环境变量" }],
+          content: [{
+            type: "text",
+            text: [
+              "错误：未能获取 OPENAI_API_KEY",
+              "",
+              "诊断：",
+              `  - process.env.OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "已设置" : "未设置"}`,
+              `  - Shell 动态读取 (~/.bashrc): 失败`,
+              "",
+              "解决方式（任选一）：",
+              "  1. 重启 pi —— 让新进程继承已 export 的环境变量",
+              "  2. 确认 ~/.bashrc 中有 export OPENAI_API_KEY=xxx（注意要有 export）",
+              "  3. 临时传参：draw apiKey=sk-xxx ...",
+            ].join("\n"),
+          }],
           isError: true,
         };
       }
 
-      const baseUrl = (process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
+      // ── 解析其余参数 ─────────────────────────────────────
       const type = (params.type ?? "architecture") as DiagramType;
-      const model = params.model ?? "gpt-4o-image";
-      const size = params.size ?? "1792x1024";
+      const model = params.model ?? "gpt-image-2";
+      const size = params.size ?? "1024x1024";
 
       if (!VALID_TYPES.includes(type)) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `错误：type 须为 architecture / dataflow / deployment，收到: "${type}"`,
-            },
-          ],
+          content: [{
+            type: "text",
+            text: `错误：type 须为 architecture / dataflow / deployment，收到: "${type}"`,
+          }],
           isError: true,
         };
       }
@@ -198,27 +172,12 @@ export default function (pi: ExtensionAPI) {
         ? `${stylePrompt}\n\n## 用户额外要求\n${params.prompt}`
         : stylePrompt;
 
-      let imageUrl: string | null = null;
+      // ── 调用 API（问题 6：进度反馈）────────────────────
+      onUpdate?.(`🎨 正在调用 ${model} 生成图表（通常需要 10~30 秒）...`);
+
+      let imageDataOrUrl: string;
       try {
-        if (model === "dall-e-3") {
-          imageUrl = await callDallE3(apiKey, baseUrl, fullPrompt, size);
-        } else {
-          if (!params.input) {
-            return {
-              content: [{ type: "text", text: "错误：gpt-4o-image 模式需要提供 input 图片路径" }],
-              isError: true,
-            };
-          }
-          const imgPath = resolve(ctx.cwd, params.input);
-          if (!existsSync(imgPath)) {
-            return {
-              content: [{ type: "text", text: `错误：文件不存在: ${imgPath}` }],
-              isError: true,
-            };
-          }
-          const b64 = readFileSync(imgPath).toString("base64");
-          imageUrl = await callGPT4oImage(apiKey, baseUrl, fullPrompt, b64);
-        }
+        imageDataOrUrl = await callGptImage2(apiKey, baseUrl, fullPrompt, size, model);
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `错误：${err?.message ?? String(err)}` }],
@@ -226,29 +185,28 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      if (!imageUrl) {
-        return {
-          content: [{ type: "text", text: "错误：AI 未返回图片，请检查 API 配置或重试" }],
-          isError: true,
-        };
+      // ── 写文件 ───────────────────────────────────────────
+      onUpdate?.("💾 写入文件...");
+      if (imageDataOrUrl.startsWith("data:")) {
+        const b64Data = imageDataOrUrl.split(",")[1];
+        writeFileSync(outPath, Buffer.from(b64Data, "base64"));
+      } else {
+        onUpdate?.("⬇️  下载图片...");
+        const imgResp = await fetch(imageDataOrUrl);
+        if (!imgResp.ok) {
+          return {
+            content: [{ type: "text", text: `错误：图片下载失败 (HTTP ${imgResp.status})` }],
+            isError: true,
+          };
+        }
+        writeFileSync(outPath, Buffer.from(await imgResp.arrayBuffer()));
       }
-
-      const imgResp = await fetch(imageUrl);
-      if (!imgResp.ok) {
-        return {
-          content: [{ type: "text", text: `错误：图片下载失败 (HTTP ${imgResp.status})` }],
-          isError: true,
-        };
-      }
-      writeFileSync(outPath, Buffer.from(await imgResp.arrayBuffer()));
 
       return {
-        content: [
-          {
-            type: "text",
-            text: `生成完成\n路径: ${outPath}\n类型: ${type}  模型: ${model}`,
-          },
-        ],
+        content: [{
+          type: "text",
+          text: `✅ 生成完成\n路径: ${outPath}\n类型: ${type}  模型: ${model}  尺寸: ${size}`,
+        }],
       };
     },
   });
