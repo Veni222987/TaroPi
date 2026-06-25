@@ -11,6 +11,7 @@
 pi install ./taropi-base \
   && pi install ./taropi-permissions \
   && pi install ./taropi-ssh-paste \
+  && pi install ./taropi-draw \
   && pi install npm:@juicesharp/rpiv-ask-user-question
 ```
 
@@ -36,6 +37,7 @@ pi install ./taropi-base \
 | `taropi-base` | 核心扩展：中文回答 + debugger/developer sub-agent |
 | `taropi-permissions` | 工具权限管控：读/写/bash 分级控制，敏感文件保护 |
 | `taropi-ssh-paste` | SSH 图片粘贴：Ctrl+Shift+V 上传剪贴板图片到远端 |
+| `taropi-draw` | AI 生图：根据手绘草图或描述生成专业架构图 (PNG) |
 
 ## 外部依赖
 

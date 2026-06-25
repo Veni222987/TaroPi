@@ -5,7 +5,8 @@
   "workspaces": [
     "taropi-base",
     "taropi-permissions",
-    "taropi-ssh-paste"
+    "taropi-ssh-paste",
+    "taropi-draw"
   ],
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.79.8",

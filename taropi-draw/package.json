@@ -1,0 +1,14 @@
+{
+  "name": "taropi-draw",
+  "version": "0.1.0",
+  "description": "AI 生图: 根据手绘草图或文字描述生成专业架构图 (PNG)",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"],
+    "prompts": ["./prompts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
