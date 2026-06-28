@@ -17,7 +17,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
@@ -30,191 +29,32 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import { AGENT_PANEL_KEY, isPanelActive, navigateTab, refreshPanel, refreshPanelWithIndex, showAgentPanel } from "./agent-panel.ts";
+import {
+  formatToolCall,
+  formatUsageStats,
+  getFinalOutput,
+  getDisplayItems,
+  getResultOutput,
+  isFailedResult,
+} from "./render.ts";
+import type { DisplayItem, OnUpdateCallback, SingleResult, SubagentDetails } from "./types.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
-function formatTokens(count: number): string {
-  if (count < 1000) return count.toString();
-  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1000000) return `${Math.round(count / 1000)}k`;
-  return `${(count / 1000000).toFixed(1)}M`;
-}
-
-function formatUsageStats(
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    cost: number;
-    contextTokens?: number;
-    turns?: number;
-  },
-  model?: string,
-): string {
-  const parts: string[] = [];
-  if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-  if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-  if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-  if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-  if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-  if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-  if (usage.contextTokens && usage.contextTokens > 0) {
-    parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
-  }
-  if (model) parts.push(model);
-  return parts.join(" ");
-}
-
-function formatToolCall(
-  toolName: string,
-  args: Record<string, unknown>,
-  themeFg: (color: any, text: string) => string,
-): string {
-  const shortenPath = (p: string) => {
-    const home = os.homedir();
-    return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-  };
-
-  switch (toolName) {
-    case "bash": {
-      const command = (args.command as string) || "...";
-      const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
-      return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
-    }
-    case "read": {
-      const rawPath = (args.file_path || args.path || "...") as string;
-      const filePath = shortenPath(rawPath);
-      const offset = args.offset as number | undefined;
-      const limit = args.limit as number | undefined;
-      let text = themeFg("accent", filePath);
-      if (offset !== undefined || limit !== undefined) {
-        const startLine = offset ?? 1;
-        const endLine = limit !== undefined ? startLine + limit - 1 : "";
-        text += themeFg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
-      }
-      return themeFg("muted", "read ") + text;
-    }
-    case "write": {
-      const rawPath = (args.file_path || args.path || "...") as string;
-      const filePath = shortenPath(rawPath);
-      const content = (args.content || "") as string;
-      const lines = content.split("\n").length;
-      let text = themeFg("muted", "write ") + themeFg("accent", filePath);
-      if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
-      return text;
-    }
-    case "edit": {
-      const rawPath = (args.file_path || args.path || "...") as string;
-      return themeFg("muted", "edit ") + themeFg("accent", shortenPath(rawPath));
-    }
-    case "ls": {
-      const rawPath = (args.path || ".") as string;
-      return themeFg("muted", "ls ") + themeFg("accent", shortenPath(rawPath));
-    }
-    case "find": {
-      const pattern = (args.pattern || "*") as string;
-      const rawPath = (args.path || ".") as string;
-      return themeFg("muted", "find ") + themeFg("accent", pattern) + themeFg("dim", ` in ${shortenPath(rawPath)}`);
-    }
-    case "grep": {
-      const pattern = (args.pattern || "") as string;
-      const rawPath = (args.path || ".") as string;
-      return (
-        themeFg("muted", "grep ") +
-        themeFg("accent", `/${pattern}/`) +
-        themeFg("dim", ` in ${shortenPath(rawPath)}`)
-      );
-    }
-    default: {
-      const argsStr = JSON.stringify(args);
-      const preview = argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
-      return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
-    }
-  }
-}
-
-interface UsageStats {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-  contextTokens: number;
-  turns: number;
-}
-
-interface SingleResult {
-  agent: string;
-  agentSource: "user" | "project" | "unknown";
-  task: string;
-  exitCode: number;
-  messages: Message[];
-  stderr: string;
-  usage: UsageStats;
-  model?: string;
-  stopReason?: string;
-  errorMessage?: string;
-  step?: number;
-}
-
-interface SubagentDetails {
-  mode: "single" | "parallel" | "chain";
-  agentScope: AgentScope;
-  projectAgentsDir: string | null;
-  results: SingleResult[];
-}
-
-function getFinalOutput(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") return part.text;
-      }
-    }
-  }
-  return "";
-}
-
-function isFailedResult(result: SingleResult): boolean {
-  return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-}
-
-function getResultOutput(result: SingleResult): string {
-  if (isFailedResult(result)) {
-    return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
-  }
-  return getFinalOutput(result.messages) || "(no output)";
-}
-
 function truncateParallelOutput(output: string): string {
   const byteLength = Buffer.byteLength(output, "utf8");
   if (byteLength <= PER_TASK_OUTPUT_CAP) return output;
 
+  // slice 按字符数截断，多字节 UTF-8 字符可能导致 byteLength 超限，循环修正
   let truncated = output.slice(0, PER_TASK_OUTPUT_CAP);
   while (Buffer.byteLength(truncated, "utf8") > PER_TASK_OUTPUT_CAP) {
     truncated = truncated.slice(0, -1);
   }
   return `${truncated}\n\n[Output truncated: ${byteLength - Buffer.byteLength(truncated, "utf8")} bytes omitted. Full output preserved in tool details.]`;
-}
-
-type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
-
-function getDisplayItems(messages: Message[]): DisplayItem[] {
-  const items: DisplayItem[] = [];
-  for (const msg of messages) {
-    if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") items.push({ type: "text", text: part.text });
-        else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
-      }
-    }
-  }
-  return items;
 }
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
@@ -262,8 +102,6 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
   return { command: "pi", args };
 }
-
-type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 async function runSingleAgent(
   defaultCwd: string,
@@ -459,10 +297,33 @@ const SubagentParams = Type.Object({
 });
 
 export function register(pi: ExtensionAPI) {
-  // 安装内置 agent 到用户目录，确保其他机器安装后立即可用
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const packageAgentsDir = path.join(__dirname, "..", "agents");
   const userAgentsDir = path.join(getAgentDir(), "agents");
+
+  pi.registerShortcut("alt+[", {
+    description: "Previous subagent tab",
+    handler: async (ctx) => {
+      if (ctx.mode !== "tui" || !isPanelActive()) return;
+      navigateTab(-1);
+    },
+  });
+
+  pi.registerShortcut("alt+]", {
+    description: "Next subagent tab",
+    handler: async (ctx) => {
+      if (ctx.mode !== "tui" || !isPanelActive()) return;
+      navigateTab(1);
+    },
+  });
+
+  pi.registerShortcut("alt+\\", {
+    description: "Close subagent panel",
+    handler: async (ctx) => {
+      if (ctx.mode !== "tui" || !isPanelActive()) return;
+      ctx.ui.setWidget(AGENT_PANEL_KEY, undefined);
+    },
+  });
 
   pi.on("session_start", async () => {
     try {
@@ -555,6 +416,8 @@ export function register(pi: ExtensionAPI) {
         const results: SingleResult[] = [];
         let previousOutput = "";
 
+        showAgentPanel(ctx, [], "chain");
+
         for (let i = 0; i < params.chain.length; i++) {
           const step = params.chain[i];
           const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
@@ -564,6 +427,7 @@ export function register(pi: ExtensionAPI) {
                 const currentResult = partial.details?.results[0];
                 if (currentResult) {
                   const allResults = [...results, currentResult];
+                  refreshPanelWithIndex(allResults, allResults.length - 1);
                   onUpdate({
                     content: partial.content,
                     details: makeDetails("chain")(allResults),
@@ -584,6 +448,7 @@ export function register(pi: ExtensionAPI) {
             makeDetails("chain"),
           );
           results.push(result);
+          refreshPanelWithIndex([...results], results.length - 1);
 
           const isError = isFailedResult(result);
           if (isError) {
@@ -628,6 +493,8 @@ export function register(pi: ExtensionAPI) {
           };
         }
 
+        showAgentPanel(ctx, allResults, "parallel");
+
         const emitParallelUpdate = () => {
           if (onUpdate) {
             const running = allResults.filter((r) => r.exitCode === -1).length;
@@ -639,6 +506,7 @@ export function register(pi: ExtensionAPI) {
               details: makeDetails("parallel")([...allResults]),
             });
           }
+          refreshPanel([...allResults]);
         };
 
         const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
@@ -784,6 +652,19 @@ export function register(pi: ExtensionAPI) {
         return text.trimEnd();
       };
 
+      const aggregateUsage = (results: SingleResult[]) => {
+        const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+        for (const r of results) {
+          total.input += r.usage.input;
+          total.output += r.usage.output;
+          total.cacheRead += r.usage.cacheRead;
+          total.cacheWrite += r.usage.cacheWrite;
+          total.cost += r.usage.cost;
+          total.turns += r.usage.turns;
+        }
+        return total;
+      };
+
       if (details.mode === "single" && details.results.length === 1) {
         const r = details.results[0];
         const isError = isFailedResult(r);
@@ -841,19 +722,6 @@ export function register(pi: ExtensionAPI) {
         if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
         return new Text(text, 0, 0);
       }
-
-      const aggregateUsage = (results: SingleResult[]) => {
-        const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-        for (const r of results) {
-          total.input += r.usage.input;
-          total.output += r.usage.output;
-          total.cacheRead += r.usage.cacheRead;
-          total.cacheWrite += r.usage.cacheWrite;
-          total.cost += r.usage.cost;
-          total.turns += r.usage.turns;
-        }
-        return total;
-      };
 
       if (details.mode === "chain") {
         const successCount = details.results.filter((r) => r.exitCode === 0).length;
