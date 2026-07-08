@@ -14,7 +14,6 @@
 # 一键安装所有扩展（含外部依赖）
 pi install ./taropi-base \
   && pi install ./taropi-permissions \
-  && pi install ./taropi-ssh-paste \
   && pi install ./taropi-draw \
   && pi install npm:@juicesharp/rpiv-ask-user-question
 ```
@@ -26,7 +25,6 @@ pi install ./taropi-base \
   "packages": [
     "/path/to/TaroPi/taropi-base",
     "/path/to/TaroPi/taropi-permissions",
-    "/path/to/TaroPi/taropi-ssh-paste",
     "/path/to/TaroPi/taropi-draw",
     "npm:@juicesharp/rpiv-ask-user-question"
   ]
@@ -41,7 +39,6 @@ pi install ./taropi-base \
 |----|------|
 | `taropi-base` | 核心扩展：subagent 工具（scout / planner / worker / reviewer） |
 | `taropi-permissions` | 工具权限管控：读/写/bash 分级控制，敏感文件保护 |
-| `taropi-ssh-paste` | SSH 图片粘贴：Ctrl+Shift+V 上传剪贴板图片到远端 |
 | `taropi-draw` | AI 生图：根据手绘草图或描述生成专业架构图 (PNG) |
 
 ## 外部依赖
