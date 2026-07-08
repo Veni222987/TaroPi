@@ -22,11 +22,11 @@ description: AI 生图 - 根据手绘草图或文字描述生成专业架构图 
 
 ## 前置条件
 
-需要 `OPENAI_API_KEY` 环境变量；如使用代理，设置 `OPENAI_BASE_URL`。
+需要 `TAROPI_DRAW_KEY` 环境变量；如使用代理，设置 `TAROPI_DRAW_URL`。
 
 ## 执行要点
 
 1. 确认用户已有草图文件或仅需文字生成
 2. 根据内容选择合适的 `type`（架构图 / 数据流 / 部署拓扑）
 3. 调用 `draw` 工具，工具执行完成后告知用户生成的文件路径
-4. 如返回错误，检查 `OPENAI_API_KEY` 是否已设置，或 `input` 文件是否存在
+4. 如返回错误，检查 `TAROPI_DRAW_KEY` 是否已设置，或 `input` 文件是否存在

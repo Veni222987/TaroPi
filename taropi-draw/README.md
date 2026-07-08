@@ -29,9 +29,9 @@ pi install ./taropi-draw
 需要 OpenAI API Key：
 
 ```bash
-export OPENAI_API_KEY=sk-...
+export TAROPI_DRAW_KEY=sk-...
 # 使用代理时（可选）
-export OPENAI_BASE_URL=https://your-proxy/v1
+export TAROPI_DRAW_URL=https://your-proxy/v1
 ```
 
 ## 使用方式

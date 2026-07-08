@@ -94,12 +94,12 @@ const DrawParams = Type.Object({
   ),
   apiKey: Type.Optional(
     Type.String({
-      description: "临时覆盖 OPENAI_API_KEY，不填则读环境变量（问题 3）",
+      description: "临时覆盖 TAROPI_DRAW_KEY，不填则读环境变量（问题 3）",
     }),
   ),
   baseUrl: Type.Optional(
     Type.String({
-      description: "临时覆盖 OPENAI_BASE_URL，不填则读环境变量（问题 3）",
+      description: "临时覆盖 TAROPI_DRAW_URL，不填则读环境变量（问题 3）",
     }),
   ),
 });
@@ -113,15 +113,15 @@ export default function (pi: ExtensionAPI) {
     description:
       "根据文字描述，调用 gpt-image-2 生成专业架构图 (PNG)。" +
       "支持 architecture / dataflow / deployment 三种类型，" +
-      "需要 OPENAI_API_KEY 环境变量（或通过 apiKey 参数临时传入）。",
+      "需要 TAROPI_DRAW_KEY 环境变量（或通过 apiKey 参数临时传入）。",
     parameters: DrawParams,
 
     async execute(_toolCallId, params, _signal, onUpdate, ctx) {
       // ── 解析 API 凭证（问题 1 & 3）──────────────────────
-      const apiKey = params.apiKey || resolveEnv("OPENAI_API_KEY");
+      const apiKey = params.apiKey || resolveEnv("TAROPI_DRAW_KEY");
       const baseUrl = (
         params.baseUrl ||
-        resolveEnv("OPENAI_BASE_URL") ||
+        resolveEnv("TAROPI_DRAW_URL") ||
         "https://api.openai.com/v1"
       ).replace(/\/$/, "");
 
@@ -130,15 +130,15 @@ export default function (pi: ExtensionAPI) {
           content: [{
             type: "text",
             text: [
-              "错误：未能获取 OPENAI_API_KEY",
+              "错误：未能获取 TAROPI_DRAW_KEY",
               "",
               "诊断：",
-              `  - process.env.OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "已设置" : "未设置"}`,
+              `  - process.env.TAROPI_DRAW_KEY: ${process.env.TAROPI_DRAW_KEY ? "已设置" : "未设置"}`,
               `  - Shell 动态读取 (~/.bashrc): 失败`,
               "",
               "解决方式（任选一）：",
               "  1. 重启 pi —— 让新进程继承已 export 的环境变量",
-              "  2. 确认 ~/.bashrc 中有 export OPENAI_API_KEY=xxx（注意要有 export）",
+              "  2. 确认 ~/.bashrc 中有 export TAROPI_DRAW_KEY=xxx（注意要有 export）",
               "  3. 临时传参：draw apiKey=sk-xxx ...",
             ].join("\n"),
           }],

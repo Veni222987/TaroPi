@@ -13,13 +13,13 @@
 
 ```bash
 # taropi-draw：AI 生图（必填）
-export OPENAI_API_KEY=sk-...
+export TAROPI_DRAW_KEY=sk-...
 
 # taropi-draw：API 代理地址（可选，默认 https://api.openai.com/v1）
-export OPENAI_BASE_URL=https://your-proxy/v1
+export TAROPI_DRAW_URL=https://your-proxy/v1
 ```
 
 | 变量 | 插件 | 是否必填 | 说明 |
 |------|------|----------|------|
-| `OPENAI_API_KEY` | taropi-draw | 必填 | OpenAI API Key，用于调用 gpt-image-2 生成架构图 |
-| `OPENAI_BASE_URL` | taropi-draw | 可选 | API 代理地址；不填则直连 `https://api.openai.com/v1` |
+| `TAROPI_DRAW_KEY` | taropi-draw | 必填 | API Key，用于调用 gpt-image-2 生成架构图 |
+| `TAROPI_DRAW_URL` | taropi-draw | 可选 | API 代理地址；不填则直连 `https://api.openai.com/v1` |
