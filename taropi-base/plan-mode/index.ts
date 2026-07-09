@@ -16,7 +16,11 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
-import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.ts";
+import { getFinalOutput, mapWithConcurrencyLimit, MAX_CONCURRENCY, runSingleAgent } from "../exec-core/index.ts";
+import type { AgentConfig, SingleResult, SubagentDetails } from "../exec-core/types.ts";
+import { getExecMode } from "../exec-mode/index.ts";
+import { discoverAgents } from "../sub-agents/agents.ts";
+import { extractTodoItems, isSafeCommand, markCompletedSteps, writePlanMarkdown, type TodoItem } from "./utils.ts";
 
 // Tools
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
@@ -138,6 +142,98 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		persistState();
 	}
 
+	async function executePlanWithSubagents(
+		cwd: string,
+		items: TodoItem[],
+		mode: "parallel" | "chain",
+	): Promise<string> {
+		const discovery = discoverAgents(cwd, "both");
+		const developer = discovery.agents.find((a) => a.name === "developer");
+		if (!developer) {
+			return "**Plan execution failed:** developer agent not found.";
+		}
+
+		const makeDetails =
+			(m: "parallel" | "chain") =>
+			(results: SingleResult[]): SubagentDetails => ({
+				mode: m,
+				agentScope: "both",
+				projectAgentsDir: discovery.projectAgentsDir,
+				results,
+			});
+
+		if (mode === "parallel") {
+			const tasks = items.map((item) => ({
+				agent: item,
+				task: `Execute plan step ${item.step}: ${item.text}`,
+			}));
+
+			const results = await mapWithConcurrencyLimit(tasks, MAX_CONCURRENCY, async ({ agent: item, task }) => {
+				return runSingleAgent(
+					cwd,
+					discovery.agents,
+					developer.name,
+					task,
+					cwd,
+					item.step,
+					undefined,
+					undefined,
+					makeDetails("parallel"),
+				);
+			});
+
+			const succeeded = results.filter((r) => r.exitCode === 0).length;
+			const summary = results
+				.map((r) => {
+					const output = getFinalOutput(r.messages) || r.stderr || "(no output)";
+					const icon = r.exitCode === 0 ? "✓" : "✗";
+					return `### Step ${r.step}: ${icon} ${r.agent}\n\n${output}`;
+				})
+				.join("\n\n---\n\n");
+			return `**Plan Complete!** (parallel: ${succeeded}/${results.length})\n\n${summary}`;
+		}
+
+		// chain mode
+		const results: SingleResult[] = [];
+		let previousOutput = "";
+
+		for (const item of items) {
+			const task = `Previous step output:\n${previousOutput || "(none)"}\n\nExecute plan step ${item.step}: ${item.text}`;
+			const result = await runSingleAgent(
+				cwd,
+				discovery.agents,
+				developer.name,
+				task,
+				cwd,
+				item.step,
+				undefined,
+				undefined,
+				makeDetails("chain"),
+			);
+			results.push(result);
+			if (result.exitCode !== 0) {
+				const errMsg = result.errorMessage || result.stderr || "(unknown error)";
+				const summary = results
+					.map((r) => {
+						const output = getFinalOutput(r.messages) || r.stderr || "(no output)";
+						const icon = r.exitCode === 0 ? "✓" : "✗";
+						return `### Step ${r.step}: ${icon} ${r.agent}\n\n${output}`;
+					})
+					.join("\n\n---\n\n");
+				return `**Plan stopped at step ${item.step}:** ${errMsg}\n\n${summary}`;
+			}
+			previousOutput = getFinalOutput(result.messages);
+		}
+
+		const summary = results
+			.map((r) => {
+				const output = getFinalOutput(r.messages) || "(no output)";
+				return `### Step ${r.step}: ✓ ${r.agent}\n\n${output}`;
+			})
+			.join("\n\n---\n\n");
+		return `**Plan Complete!** (chain: ${results.length} steps)\n\n${summary}`;
+	}
+
 	pi.registerCommand("plan", {
 		description: "Toggle plan mode (read-only exploration)",
 		handler: async (_args, ctx) => togglePlanMode(ctx),
@@ -158,6 +254,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	pi.registerShortcut(Key.ctrl("p"), {
 		description: "Toggle plan mode",
 		handler: async (ctx) => togglePlanMode(ctx),
+	});
+
+	// Sync exec mode indicator in footer
+	pi.events.on("exec-mode:changed", (mode) => {
+		// Footer status updated by exec-mode itself; plan-mode can read getExecMode() on Execute
 	});
 
 	// Block destructive bash commands in plan mode
@@ -284,6 +385,8 @@ After completing a step, include a [DONE:n] tag in your response.`,
 			const extracted = extractTodoItems(getTextContent(lastAssistant));
 			if (extracted.length > 0) {
 				todoItems = extracted;
+				const planPath = writePlanMarkdown(ctx.cwd, todoItems);
+				ctx.ui.notify(`Plan saved: ${planPath}`, "info");
 			}
 		}
 
@@ -305,28 +408,48 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		]);
 
 		if (choice?.startsWith("Execute")) {
-			const firstTodoItem = todoItems[0];
-			if (!firstTodoItem) return;
-
+			const mode = getExecMode();
 			planModeEnabled = false;
-			executionMode = true;
 			restoreNormalModeTools();
-			updateStatus(ctx);
-			persistState();
 
-			const remainingList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
-			const execMessage = `Execute the plan.
+			if (mode === "single") {
+				const firstTodoItem = todoItems[0];
+				if (!firstTodoItem) return;
+
+				executionMode = true;
+				updateStatus(ctx);
+				persistState();
+
+				const remainingList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
+				const execMessage = `Execute the plan.
 
 Remaining steps:
 ${remainingList}
 
 Start with: ${firstTodoItem.text}
 After completing a step, include a [DONE:n] tag in your response.`;
-			pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
-			pi.sendMessage(
-				{ customType: "plan-mode-execute", content: execMessage, display: true },
-				{ triggerTurn: true, deliverAs: "followUp" },
-			);
+				pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
+				pi.sendMessage(
+					{ customType: "plan-mode-execute", content: execMessage, display: true },
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+			} else {
+				executionMode = false;
+				updateStatus(ctx);
+				persistState();
+				pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
+				executePlanWithSubagents(ctx.cwd, todoItems, mode).then((result) => {
+					pi.sendMessage(
+						{ customType: "plan-complete", content: result, display: true },
+						{ triggerTurn: false },
+					);
+				}).catch((err: Error) => {
+					pi.sendMessage(
+						{ customType: "plan-error", content: `**Plan execution failed:** ${err.message}`, display: true },
+						{ triggerTurn: false },
+					);
+				});
+			}
 		} else if (choice === "Refine the plan") {
 			const refinement = await ctx.ui.editor("Refine the plan:", "");
 			if (refinement?.trim()) {

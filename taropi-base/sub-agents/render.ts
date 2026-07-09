@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import type { Message } from "@earendil-works/pi-ai";
+import { getFinalOutput } from "../exec-core/index.ts";
 import type { DisplayItem, SingleResult } from "./types.ts";
 
 export function formatTokens(count: number): string {
@@ -105,18 +106,6 @@ export function formatToolCall(
       return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
     }
   }
-}
-
-export function getFinalOutput(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") return part.text;
-      }
-    }
-  }
-  return "";
 }
 
 export function getDisplayItems(messages: Message[]): DisplayItem[] {

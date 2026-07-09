@@ -3,6 +3,9 @@
  * Extracted for testability.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 // Destructive commands blocked in plan mode
 const DESTRUCTIVE_PATTERNS = [
 	/\brm\b/i,
@@ -158,7 +161,32 @@ export function extractDoneSteps(message: string): number[] {
 	return steps;
 }
 
-export function markCompletedSteps(text: string, items: TodoItem[]): number {
+
+
+export function writePlanMarkdown(cwd: string, items: TodoItem[]): string {
+  const plansDir = path.join(cwd, ".pi", "taropi", "plans");
+  fs.mkdirSync(plansDir, { recursive: true });
+
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const filePath = path.join(plansDir, `${ts}-plan.md`);
+
+  const lines = [
+    "# Plan",
+    "",
+    `**创建时间**: ${now.toISOString().replace("T", " ").slice(0, 19)}`,
+    "**状态**: ⏸ 已规划",
+    "",
+    "## Todo",
+    "",
+    ...items.map((item) => `- [ ] ${item.step}. ${item.text}`),
+    "",
+  ];
+
+  fs.writeFileSync(filePath, lines.join("\n"), "utf-8");
+  return filePath;
+}
 	const doneSteps = extractDoneSteps(text);
 	for (const step of doneSteps) {
 		const item = items.find((t) => t.step === step);
