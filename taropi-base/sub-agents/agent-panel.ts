@@ -130,5 +130,5 @@ export function navigateTab(delta: number): boolean {
 }
 
 export function isPanelActive(): boolean {
-  return panelState.tui !== null && panelState.results.length > 0;
+  return panelState.mode !== null && panelState.results.length > 0;
 }
