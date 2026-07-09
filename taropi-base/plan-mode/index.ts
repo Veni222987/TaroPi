@@ -16,9 +16,8 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
-import { getFinalOutput, mapWithConcurrencyLimit, MAX_CONCURRENCY, runSingleAgent } from "../exec-core/index.ts";
-import type { AgentConfig, SingleResult, SubagentDetails } from "../exec-core/types.ts";
-import { getExecMode } from "../exec-mode/index.ts";
+import { getFinalOutput, mapWithConcurrencyLimit, MAX_CONCURRENCY, runSingleAgent } from "../sub-agents/engine.ts";
+import type { AgentConfig, SingleResult, SubagentDetails } from "../sub-agents/types.ts";
 import { discoverAgents } from "../sub-agents/agents.ts";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, writePlanMarkdown, type TodoItem } from "./utils.ts";
 
@@ -256,11 +255,6 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		handler: async (ctx) => togglePlanMode(ctx),
 	});
 
-	// Sync exec mode indicator in footer
-	pi.events.on("exec-mode:changed", (mode) => {
-		// Footer status updated by exec-mode itself; plan-mode can read getExecMode() on Execute
-	});
-
 	// Block destructive bash commands in plan mode
 	pi.on("tool_call", async (event) => {
 		if (!planModeEnabled || event.toolName !== "bash") return;
@@ -402,13 +396,19 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		};
 
 		const choice = await ctx.ui.select("Plan mode - what next?", [
-			"Execute the plan (track progress)",
+			"Execute: single (当前会话顺序执行)",
+			"Execute: parallel (并发分派给 developer subagent)",
+			"Execute: chain (链式分派给 developer subagent)",
 			"Stay in plan mode",
 			"Refine the plan",
 		]);
 
-		if (choice?.startsWith("Execute")) {
-			const mode = getExecMode();
+		if (choice?.startsWith("Execute:")) {
+			const mode = choice.includes("parallel")
+				? "parallel"
+				: choice.includes("chain")
+					? "chain"
+					: "single";
 			planModeEnabled = false;
 			restoreNormalModeTools();
 

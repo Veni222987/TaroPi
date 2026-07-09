@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-import type { AgentScope, AgentConfig } from "../exec-core/types.ts";
+import type { AgentScope, AgentConfig } from "./types.ts";
 
 export interface AgentDiscoveryResult {
   agents: AgentConfig[];

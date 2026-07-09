@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import type { Message } from "@earendil-works/pi-ai";
-import { getFinalOutput } from "../exec-core/index.ts";
+import { getFinalOutput } from "./engine.ts";
 import type { DisplayItem, SingleResult } from "./types.ts";
 
 export function formatTokens(count: number): string {

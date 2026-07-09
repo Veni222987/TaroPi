@@ -17,7 +17,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   CONFIG_DIR_NAME,
@@ -34,8 +33,8 @@ import {
   MAX_PARALLEL_TASKS,
   runSingleAgent,
   truncateParallelOutput,
-} from "../exec-core/index.ts";
-import type { AgentScope, OnUpdateCallback, SingleResult, SubagentDetails } from "../exec-core/types.ts";
+} from "./engine.ts";
+import type { AgentScope, OnUpdateCallback, SingleResult, SubagentDetails } from "./types.ts";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
 import { AGENT_PANEL_KEY, isPanelActive, navigateTab, refreshPanel, refreshPanelWithIndex, showAgentPanel } from "./agent-panel.ts";
 import {
@@ -104,6 +103,19 @@ export function register(pi: ExtensionAPI) {
     handler: async (ctx) => {
       if (ctx.mode !== "tui" || !isPanelActive()) return;
       ctx.ui.setWidget(AGENT_PANEL_KEY, undefined);
+    },
+  });
+
+  type ExecMode = "single" | "parallel" | "chain";
+  const MODE_CYCLE: ExecMode[] = ["single", "parallel", "chain"];
+  let currentModeIndex = 0;
+
+  pi.registerShortcut("ctrl+shift+m", {
+    description: "Cycle subagent execution mode",
+    handler: async (ctx) => {
+      currentModeIndex = (currentModeIndex + 1) % MODE_CYCLE.length;
+      const mode = MODE_CYCLE[currentModeIndex]!;
+      ctx.ui.setStatus("subagent-mode", `🔀 ${mode}`);
     },
   });
 
