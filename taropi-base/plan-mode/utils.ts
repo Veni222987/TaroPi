@@ -187,6 +187,8 @@ export function writePlanMarkdown(cwd: string, items: TodoItem[]): string {
   fs.writeFileSync(filePath, lines.join("\n"), "utf-8");
   return filePath;
 }
+
+export function markCompletedSteps(text: string, items: TodoItem[]): number {
 	const doneSteps = extractDoneSteps(text);
 	for (const step of doneSteps) {
 		const item = items.find((t) => t.step === step);
