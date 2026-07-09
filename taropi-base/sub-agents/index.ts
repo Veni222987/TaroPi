@@ -10,6 +10,8 @@
  *   - Chain: { chain: [{ agent: "name", task: "... {previous} ..." }, ...] }
  *
  * Uses JSON mode to capture structured output from subagents.
+ *
+ * Ctrl+Shift+M cycles subagent execution mode: single → parallel → chain.
  */
 
 import { spawn } from "node:child_process";
@@ -322,6 +324,19 @@ export function register(pi: ExtensionAPI) {
     handler: async (ctx) => {
       if (ctx.mode !== "tui" || !isPanelActive()) return;
       ctx.ui.setWidget(AGENT_PANEL_KEY, undefined);
+    },
+  });
+
+  type SubagentExecMode = "single" | "parallel" | "chain";
+  const MODE_CYCLE: SubagentExecMode[] = ["single", "parallel", "chain"];
+  let currentModeIndex = 0;
+
+  pi.registerShortcut("ctrl+shift+m", {
+    description: "Cycle subagent execution mode",
+    handler: async (ctx) => {
+      currentModeIndex = (currentModeIndex + 1) % MODE_CYCLE.length;
+      const mode = MODE_CYCLE[currentModeIndex]!;
+      ctx.ui.setStatus("subagent-mode", `🔀 ${mode}`);
     },
   });
 
