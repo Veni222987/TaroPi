@@ -82,7 +82,7 @@ export function register(pi: ExtensionAPI) {
   const packageAgentsDir = path.join(__dirname, "..", "agents");
   const userAgentsDir = path.join(getAgentDir(), "agents");
 
-  pi.registerShortcut("alt+[", {
+  pi.registerShortcut("ctrl+shift+[", {
     description: "Previous subagent tab",
     handler: async (ctx) => {
       if (ctx.mode !== "tui" || !isPanelActive()) return;
@@ -90,7 +90,7 @@ export function register(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerShortcut("alt+]", {
+  pi.registerShortcut("ctrl+shift+]", {
     description: "Next subagent tab",
     handler: async (ctx) => {
       if (ctx.mode !== "tui" || !isPanelActive()) return;
@@ -98,7 +98,7 @@ export function register(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerShortcut("alt+\\", {
+  pi.registerShortcut("ctrl+shift+\\", {
     description: "Close subagent panel",
     handler: async (ctx) => {
       if (ctx.mode !== "tui" || !isPanelActive()) return;
