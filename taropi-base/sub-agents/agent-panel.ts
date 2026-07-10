@@ -1,4 +1,5 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { formatToolCall, getDisplayItems } from "./render.ts";
 import type { SingleResult } from "./types.ts";
 
@@ -58,7 +59,7 @@ class AgentPanelComponent {
     lines.push(hr);
 
     const selected = results[selectedIndex];
-    const contentLines = selected ? buildPanelLines(selected, theme, PANEL_MAX_LINES) : [];
+    const contentLines = selected ? buildPanelLines(selected, theme, PANEL_MAX_LINES, w) : [];
     lines.push(...contentLines);
     // 用空行填满固定高度，防止内容变化时编辑器区域上下抖动
     for (let k = contentLines.length; k < PANEL_MAX_LINES; k++) lines.push("");
@@ -67,18 +68,17 @@ class AgentPanelComponent {
   }
 }
 
-function buildPanelLines(result: SingleResult, theme: Theme, maxLines: number): string[] {
+function buildPanelLines(result: SingleResult, theme: Theme, maxLines: number, maxWidth: number): string[] {
   if (result.exitCode === -1 && result.messages.length === 0)
     return [theme.fg("dim", "  (starting…)")];
   const items = getDisplayItems(result.messages);
   const out: string[] = [];
+  const clamp = (line: string) => truncateToWidth(line, maxWidth - 1);
   for (const item of items) {
     if (item.type === "toolCall") {
-      out.push(
-        "  " + theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-      );
+      out.push(clamp("  " + theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme))));
     } else {
-      for (const line of item.text.split("\n")) out.push("  " + theme.fg("toolOutput", line));
+      for (const line of item.text.split("\n")) out.push(clamp("  " + theme.fg("toolOutput", line)));
     }
   }
   if (out.length === 0)

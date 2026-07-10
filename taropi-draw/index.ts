@@ -172,8 +172,12 @@ export default function (pi: ExtensionAPI) {
         ? `${stylePrompt}\n\n## 用户额外要求\n${params.prompt}`
         : stylePrompt;
 
+      const emitProgress = (text: string) => {
+        onUpdate?.({ content: [{ type: "text", text }] } as any);
+      };
+
       // ── 调用 API（问题 6：进度反馈）────────────────────
-      onUpdate?.(`🎨 正在调用 ${model} 生成图表（通常需要 10~30 秒）...`);
+      emitProgress(`🎨 正在调用 ${model} 生成图表（通常需要 10~30 秒）...`);
 
       let imageDataOrUrl: string;
       try {
@@ -186,12 +190,12 @@ export default function (pi: ExtensionAPI) {
       }
 
       // ── 写文件 ───────────────────────────────────────────
-      onUpdate?.("💾 写入文件...");
+      emitProgress("💾 写入文件...");
       if (imageDataOrUrl.startsWith("data:")) {
         const b64Data = imageDataOrUrl.split(",")[1];
         writeFileSync(outPath, Buffer.from(b64Data, "base64"));
       } else {
-        onUpdate?.("⬇️  下载图片...");
+        emitProgress("⬇️  下载图片...");
         const imgResp = await fetch(imageDataOrUrl);
         if (!imgResp.ok) {
           return {
