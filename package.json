@@ -4,7 +4,6 @@
   "description": "个人 pi coding agent 插件集合(Monorepo)",
   "workspaces": [
     "taropi-base",
-    "taropi-permissions",
     "taropi-draw"
   ],
   "devDependencies": {

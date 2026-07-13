@@ -1,6 +1,6 @@
 # taropi-base
 
-TaroPi 基础扩展，提供核心能力。
+TaroPi 整合包，一个入口加载所有核心能力。
 
 ## 功能
 
@@ -9,57 +9,117 @@ TaroPi 基础扩展，提供核心能力。
 | 🇨🇳 中文回答 | 追加 system prompt，强制 Agent 使用简体中文 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
-| 📋 Plan Mode | `/plan` / `Ctrl+Alt+P` — 只读探索模式，先出计划再执行，防止误改代码 |
-| 📣 Additionally | `/additionally` — Agent 执行过程中实时插入补充说明 |
+| 📋 Plan Mode | `/plan` / `Ctrl+Alt+P` — 只读探索模式，先出计划再执行 |
+| 📣 Additionally | `/additionally` — 执行过程中实时插入补充说明 |
+| 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
+| 🌐 网络访问 | 网页搜索、URL 抓取、GitHub 克隆、PDF 提取、YouTube 理解 |
 
-## 使用方式
+## 安装
 
-### 命令
+在 `~/.pi/agent/settings.json` 的 `packages` 里加一行：
 
-```bash
-/debugger 修复 handler 里未捕获的异常
-/developer 新增用户导出接口
+```json
+{
+  "packages": [
+    "/path/to/taropi-base"
+  ]
+}
 ```
 
-### 快捷键
+## 配置
 
-在输入框输入 `#debugger` 或 `#developer` 加任务描述即可触发。
+### 权限管控（可选）
 
-### Tool
+默认配置开箱即用。如需自定义，编辑 `~/.pi/agent/permissions.json`：
 
-Agent 可调用 `delegate_to_debugger` / `delegate_to_developer` tool 启动并行 sub-agent。
-
-### Plan Mode（只读探索模式，详见 [`plan-mode/README.md`](./plan-mode/README.md)）
-
-```bash
-/plan          # 切换 plan 模式（开启后 edit/write 工具被禁用）
-/todos         # 查看当前计划进度
-Ctrl+Alt+P     # 快捷键切换 plan 模式
+```json
+{
+  "externalWriteConfirm": true,
+  "deny": [
+    "**/.env",
+    "**/.ssh/**",
+    { "tool": "bash", "pattern": "rm *", "reason": "请用 mv <file> .trash/ 替代" }
+  ]
+}
 ```
 
-1. `/plan` 开启后，Agent 只能读文件、跑只读 bash 命令（`cat` / `grep` / `git status` 等），无法修改任何文件
-2. 让 Agent 分析需求，在回复中输出 `Plan:` 开头的编号步骤列表
-3. 选择 "Execute the plan" 后自动恢复完整工具权限并按步骤执行
-4. 执行过程中 Agent 用 `[DONE:n]` 标记完成的步骤，界面顶部会显示进度 widget
-5. 状态可在 `/resume` 会话恢复后保留
+首次启动时会自动生成该文件并写入默认规则。
+
+### 网络访问（[pi-web-access](https://github.com/nicobailon/pi-web-access)）
+
+**无需任何 API key 即可使用**：Exa MCP 提供零配置搜索，开箱即用。
+
+如需接入其他搜索提供商，编辑 `~/.pi/web-search.json`：
+
+```json
+{
+  "provider": "brave",
+  "workflow": "summary-review"
+}
+```
+
+#### 搜索提供商
+
+| 提供商 | 配置字段 | 环境变量 | 申请链接 |
+|--------|---------|---------|---------|
+| Brave Search | `braveApiKey` | `BRAVE_API_KEY` | https://brave.com/search/api/ |
+| Exa | `exaApiKey` | `EXA_API_KEY` | https://exa.ai |
+| Tavily | `tavilyApiKey` | `TAVILY_API_KEY` | https://tavily.com |
+| Perplexity | `perplexityApiKey` | `PERPLEXITY_API_KEY` | https://www.perplexity.ai/settings/api |
+| OpenAI | `openaiApiKey` | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
+| Google Gemini | `geminiApiKey` | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
+| Parallel | `parallelApiKey` | `PARALLEL_API_KEY` | https://parallel.ai |
+
+#### 完整示例配置（`~/.pi/web-search.json`）
+
+```json
+{
+  "provider": "brave",
+  "workflow": "summary-review",
+
+  "braveApiKey": "BSA_...",
+  "exaApiKey": "exa-...",
+  "tavilyApiKey": "tvly-...",
+  "perplexityApiKey": "pplx-...",
+  "openaiApiKey": "sk-...",
+  "geminiApiKey": "AIza...",
+
+  "searchModel": "gemini-2.5-flash",
+  "summaryModel": "anthropic/claude-haiku-4-5",
+  "curatorTimeoutSeconds": 20,
+
+  "githubClone": {
+    "enabled": true,
+    "maxRepoSizeMB": 350,
+    "clonePath": "/tmp/pi-github-repos"
+  },
+
+  "youtube": {
+    "enabled": true,
+    "preferredModel": "gemini-2.5-flash"
+  },
+
+  "shortcuts": {
+    "curate": "ctrl+shift+s",
+    "activity": "ctrl+shift+w"
+  }
+}
+```
+
+`provider` 可选值：`brave` / `exa` / `tavily` / `perplexity` / `openai` / `gemini`
+
+`workflow` 可选值：`summary-review`（默认，人工审阅）/ `auto-summary`（自动摘要）/ `none`
 
 ## 文件结构
 
 ```
 taropi-base/
-├── index.ts              # 入口：注册 sys-prompt、sub-agents、plan-mode
-├── plan-mode/
-│   ├── index.ts          # Plan Mode 核心逻辑
-│   ├── utils.ts          # 计划提取 / 命令安全校验等纯函数
-│   └── README.md         # 详细使用说明
-├── sys-prompt/
-│   ├── register.ts       # 注入中文回答 prompt
-│   └── append_system.md  # 中文回答 + 工作原则 prompt
-├── sub-agents/
-│   ├── register.ts       # 注册 # 前缀、/command、tool
-│   ├── runner.ts         # sub-agent 执行器
-│   ├── debugger.ts       # Debugger 配置
-│   └── developer.ts      # Developer 配置
+├── index.ts              # 入口：统一注册所有模块
+├── chinese/              # 中文强制回答
+├── sub-agents/           # debugger / developer sub-agent
+├── plan-mode/            # Plan Mode（含 README）
+├── additionally/         # /additionally 命令
+├── permissions/          # 权限管控
 └── prompts/              # 可发现的 prompt 模板
 ```
 
@@ -67,3 +127,4 @@ taropi-base/
 
 - `@earendil-works/pi-coding-agent` (peer)
 - `typebox` (peer)
+- `pi-web-access` (bundled，随 `npm install` 自动安装)

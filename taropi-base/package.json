@@ -1,17 +1,26 @@
 {
   "name": "taropi-base",
   "version": "0.1.0",
-  "description": "TaroPi 基础扩展: 中文回答 + debugger/developer sub-agent",
-  "keywords": ["pi-package"],
+  "description": "TaroPi 基础扩展: 子Agent、主动提问、web_access等。",
+  "keywords": [
+    "pi-package"
+  ],
   "pi": {
-    "extensions": ["./index.ts"],
-    "prompts": ["./prompts"]
+    "extensions": [
+      "./index.ts"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "dependencies": {
+    "pi-web-access": "github:nicobailon/pi-web-access"
   }
 }
