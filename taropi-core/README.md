@@ -1,4 +1,4 @@
-# taropi-base
+# taropi-core
 
 TaroPi 整合包，一个入口加载所有核心能力。
 
@@ -21,7 +21,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 ```json
 {
   "packages": [
-    "/path/to/taropi-base"
+    "/path/to/taropi-core"
   ]
 }
 ```
@@ -113,15 +113,22 @@ TaroPi 整合包，一个入口加载所有核心能力。
 ## 文件结构
 
 ```
-taropi-base/
+taropi-core/
 ├── index.ts              # 入口：统一注册所有模块
 ├── chinese/              # 中文强制回答
 ├── sub-agents/           # debugger / developer sub-agent
 ├── plan-mode/            # Plan Mode（含 README）
 ├── additionally/         # /additionally 命令
 ├── permissions/          # 权限管控
-└── prompts/              # 可发现的 prompt 模板
+└── plain/                # 纯文本资源：无需 TS 代码，pi 按 package.json 的 pi.prompts / pi.skills 直接识别
+    ├── agents/           # subagent 定义（scout / planner / worker / reviewer），会话启动时自动同步到 ~/.pi/agent/agents/
+    ├── prompts/          # 可发现的 prompt 模板（/implement 等）
+    └── skills/           # 可发现的 skill（SKILL.md）
 ```
+
+### 新增 prompt / skill
+
+新建 `plain/prompts/<name>.md`（frontmatter 含 `description`，正文用 `$@` 接收参数）或 `plain/skills/<name>/SKILL.md`（frontmatter 含 `name` / `description`），无需改动 `package.json` 或写代码，`/reload` 即可生效。
 
 ## 依赖
 

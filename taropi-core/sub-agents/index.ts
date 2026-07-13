@@ -88,7 +88,7 @@ const SubagentParams = Type.Object({
 
 export function register(pi: ExtensionAPI) {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const packageAgentsDir = path.join(__dirname, "..", "agents");
+  const packageAgentsDir = path.join(__dirname, "..", "plain", "agents");
   const userAgentsDir = path.join(getAgentDir(), "agents");
 
   pi.registerShortcut("ctrl+shift+[", {

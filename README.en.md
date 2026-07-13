@@ -16,8 +16,7 @@ Before installing, copy the config files as described in [`recommend/README.md`]
 
 ```bash
 # One-liner to install all extensions (including external deps)
-pi install ./taropi-base \
-  && pi install ./taropi-permissions \
+pi install ./taropi-core \
   && pi install ./taropi-draw \
   && pi install npm:@juicesharp/rpiv-ask-user-question
 ```
@@ -27,8 +26,7 @@ Or manually add to `~/.pi/agent/settings.json`:
 ```json
 {
   "packages": [
-    "/path/to/TaroPi/taropi-base",
-    "/path/to/TaroPi/taropi-permissions",
+    "/path/to/TaroPi/taropi-core",
     "/path/to/TaroPi/taropi-draw",
     "npm:@juicesharp/rpiv-ask-user-question"
   ]
@@ -41,8 +39,7 @@ Run `/reload` or restart pi after installation.
 
 | Package | Description |
 |---------|-------------|
-| `taropi-base` | Core: Chinese response + debugger/developer sub-agents |
-| `taropi-permissions` | Tool permission control: read/write/bash gating, sensitive file protection |
+| `taropi-core` | Core: subagent tools, permission control, Chinese response, web access, etc. |
 | `taropi-draw` | AI image generation: generate professional architecture diagrams (PNG) from sketches or descriptions |
 
 ## External Dependencies

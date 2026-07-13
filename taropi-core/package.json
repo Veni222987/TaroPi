@@ -1,5 +1,5 @@
 {
-  "name": "taropi-base",
+  "name": "taropi-core",
   "version": "0.1.0",
   "description": "TaroPi 基础扩展: 子Agent、主动提问、web_access等。",
   "keywords": [
@@ -10,7 +10,10 @@
       "./index.ts"
     ],
     "prompts": [
-      "./prompts"
+      "./plain/prompts"
+    ],
+    "skills": [
+      "./plain/skills"
     ]
   },
   "peerDependencies": {
