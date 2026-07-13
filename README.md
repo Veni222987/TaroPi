@@ -4,6 +4,10 @@
 
 个人 [pi coding agent](https://pi.dev) 扩展集合 (Monorepo)。
 
+## 整体架构
+
+![TaroPi 架构图](./resource/architecture.png)
+
 ## 推荐配置
 
 安装插件前，先按 [`recommend/README.md`](./recommend/README.md) 的说明将配置文件复制到对应位置。

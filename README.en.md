@@ -4,12 +4,21 @@
 
 A personal collection of [pi coding agent](https://pi.dev) extensions (monorepo).
 
+## Architecture
+
+![TaroPi Architecture](./resource/architecture.png)
+
+## Recommended Setup
+
+Before installing, copy the config files as described in [`recommend/README.md`](./recommend/README.md).
+
 ## Install
 
 ```bash
 # One-liner to install all extensions (including external deps)
 pi install ./taropi-base \
   && pi install ./taropi-permissions \
+  && pi install ./taropi-draw \
   && pi install npm:@juicesharp/rpiv-ask-user-question
 ```
 
@@ -20,6 +29,7 @@ Or manually add to `~/.pi/agent/settings.json`:
   "packages": [
     "/path/to/TaroPi/taropi-base",
     "/path/to/TaroPi/taropi-permissions",
+    "/path/to/TaroPi/taropi-draw",
     "npm:@juicesharp/rpiv-ask-user-question"
   ]
 }
@@ -33,6 +43,7 @@ Run `/reload` or restart pi after installation.
 |---------|-------------|
 | `taropi-base` | Core: Chinese response + debugger/developer sub-agents |
 | `taropi-permissions` | Tool permission control: read/write/bash gating, sensitive file protection |
+| `taropi-draw` | AI image generation: generate professional architecture diagrams (PNG) from sketches or descriptions |
 
 ## External Dependencies
 
