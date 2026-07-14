@@ -6,7 +6,7 @@ import registerPlanMode from "./plan-mode/index.js";
 import { registerChinese } from "./chinese/index.js";
 import registerPermissions from "./permissions/index.js";
 import registerWebAccess from "pi-web-access/index.ts";
-import registerAskUserQuestion from "@juicesharp/rpiv-ask-user-question";
+import registerAskUserQuestion from "@juicesharp/rpiv-ask-user-question/index.ts";
 
 export default function (pi: ExtensionAPI) {
   registerSubAgents(pi);
