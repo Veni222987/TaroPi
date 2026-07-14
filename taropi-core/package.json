@@ -24,6 +24,7 @@
     "typebox": "*"
   },
   "dependencies": {
-    "pi-web-access": "github:nicobailon/pi-web-access"
+    "pi-web-access": "github:nicobailon/pi-web-access",
+    "@juicesharp/rpiv-ask-user-question": "^1.20.0"
   }
 }

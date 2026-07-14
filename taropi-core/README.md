@@ -135,3 +135,4 @@ taropi-core/
 - `@earendil-works/pi-coding-agent` (peer)
 - `typebox` (peer)
 - `pi-web-access` (bundled，随 `npm install` 自动安装)
+- `@juicesharp/rpiv-ask-user-question` (bundled，随 `npm install` 自动安装)

@@ -15,20 +15,18 @@
 ## 安装
 
 ```bash
-# 一键安装所有扩展（含外部依赖）
-pi install ./taropi-core \
-  && pi install ./taropi-draw \
-  && pi install npm:@juicesharp/rpiv-ask-user-question
+# 一条命令搞定
+pi install git:git@github.com:Veni222987/TaroPi.git
 ```
+
+pi 会自动 clone 仓库并运行 `npm install`，`pi-web-access`、`ask_user_question` 等所有依赖全部就位。
 
 也可手动写入 `~/.pi/agent/settings.json`：
 
 ```json
 {
   "packages": [
-    "/path/to/TaroPi/taropi-core",
-    "/path/to/TaroPi/taropi-draw",
-    "npm:@juicesharp/rpiv-ask-user-question"
+    "git:git@github.com:Veni222987/TaroPi.git"
   ]
 }
 ```
@@ -39,11 +37,5 @@ pi install ./taropi-core \
 
 | 包 | 说明 |
 |----|------|
-| `taropi-core` | 核心整合包：subagent 工具、权限管控、中文回答、网络访问等 |
+| `taropi-core` | 核心整合包：subagent 工具、权限管控、中文回答、网络访问、向用户提问等 |
 | `taropi-draw` | AI 生图：根据手绘草图或描述生成专业架构图 (PNG) |
-
-## 外部依赖
-
-| 包 | 说明 |
-|----|------|
-| [rpiv-ask-user-question](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question) | 向用户提问 |
