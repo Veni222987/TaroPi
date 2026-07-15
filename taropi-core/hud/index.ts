@@ -52,6 +52,11 @@ let modelProvider = "";
 let modelId = "";
 let cwd = "";
 
+// 会话累计 token 用量（来自每轮 turn_end 的 usage，用于计算缓存命中率）
+let cumInputTokens = 0;
+let cumCacheReadTokens = 0;
+let cumCacheWriteTokens = 0;
+
 // ═══════════════════════════════════════════════════════════════
 // ANSI 调色板
 // ═══════════════════════════════════════════════════════════════
@@ -87,9 +92,8 @@ const I_PATH = "⌘";
 const I_BRANCH = "⎇";
 const I_CLOCK = "✦";
 const I_CTX = "⊡";
-const I_IN = "↑";
-const I_OUT = "↓";
-const I_CACHE = "⊗";
+const I_TOK = "Σ";
+const I_HIT = "◎";
 const I_DONE = "✔";
 const I_RUN = "↻";
 const I_CLAUDE = "※";
@@ -383,7 +387,11 @@ async function buildHud(ctx: any): Promise<string[]> {
       if (winLabel) ctxStr += ` ${dim(`(${winLabel})`)}`;
 
       const totalTokens = usage.tokens ?? 0;
-      const tokStr = `${c(I_IN, CYAN)} ${c(fmtTokens(totalTokens), FG)}`;
+      const cacheTotal = cumInputTokens + cumCacheReadTokens + cumCacheWriteTokens;
+      const cacheHitRate = cacheTotal > 0 ? (cumCacheReadTokens / cacheTotal) * 100 : 0;
+      const tokStr =
+        `${c(I_TOK, CYAN)} ${c(fmtTokens(totalTokens), FG)} ` +
+        `${c(I_HIT, PURPLE)} ${c(`${cacheHitRate.toFixed(0)}%`, FG)}`;
 
       const line2 = `${modelStr} ${sep} ${ctxStr} ${sep} ${tokStr}`;
       lines.push(line2);
@@ -459,6 +467,9 @@ export function registerHud(pi: ExtensionAPI) {
     turnIndex = 0;
     cwd = ctx.cwd;
     tools = [];
+    cumInputTokens = 0;
+    cumCacheReadTokens = 0;
+    cumCacheWriteTokens = 0;
     if (ctx.model) {
       modelProvider = (ctx.model as any).provider ?? "";
       modelId = (ctx.model as any).id ?? "";
@@ -505,7 +516,17 @@ export function registerHud(pi: ExtensionAPI) {
     refreshHud(ctx);
   });
 
-  pi.on("turn_end", (_event, ctx) => refreshHud(ctx));
+  pi.on("turn_end", (event, ctx) => {
+    // 累计本轮的 token 用量（仅当 message 为带 usage 的 assistant 消息时）
+    const msg = event.message as any;
+    const usage = msg?.usage;
+    if (usage) {
+      cumInputTokens += usage.input ?? 0;
+      cumCacheReadTokens += usage.cacheRead ?? 0;
+      cumCacheWriteTokens += usage.cacheWrite ?? 0;
+    }
+    refreshHud(ctx);
+  });
 
   pi.on("agent_start", (_event, ctx) => {
     agents.push({ status: "running", startTime: Date.now() });
