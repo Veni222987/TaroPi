@@ -95,7 +95,6 @@ const I_RUN = "↻";
 const I_CLAUDE = "※";
 const I_MCP = "⊕";
 const I_SKILL = "★";
-const I_EXT = "◈";
 
 // ═══════════════════════════════════════════════════════════════
 // Fish 风格路径缩写（移植自原版 shannon-statusline）
@@ -209,39 +208,6 @@ function fmtDuration(ms: number): string {
   if (m < 60) return `${m}m ${Math.round(s % 60)}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Matrix 数字雨（6 列，与原版一致）
-// ═══════════════════════════════════════════════════════════════
-
-const RAIN_CHARS = "ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿ0123456789λΨΩΔΦ";
-const RAIN_COLS = 6;
-const RAIN_SPEED_MS = 900;
-const RAIN_COL_OFFSET_MS = 280;
-
-function rainCell(row: number, col: number, now: number, total: number): string {
-  const colPhase = ((now + col * RAIN_COL_OFFSET_MS) / RAIN_SPEED_MS) % total;
-  const headRow = Math.floor(colPhase);
-  const dist = (row - headRow + total) % total;
-  const ch = RAIN_CHARS[Math.floor(now / 350 + row * 7 + col * 13) % RAIN_CHARS.length] ?? " ";
-
-  if (dist === 0) return `${rgb(200, 255, 200)}${ch}${R}`;
-  if (dist === 1) return `${rgb(57, 255, 20)}${ch}${R}`;
-  if (dist === 2) return `${rgb(0, 200, 0)}${ch}${R}`;
-  if (dist === 3) return `${rgb(0, 160, 0)}${ch}${R}`;
-  if (dist === 4) return `${rgb(0, 100, 0)}${ch}${R}`;
-  if (dist === total - 1) return `${rgb(20, 20, 20)}${ch}${R}`;
-  if (dist === total - 2) return `${rgb(0, 0, 0)}${ch}${R}`;
-  return `${rgb(8, 8, 8)}${ch}${R}`;
-}
-
-function makeRain(row: number, total: number): string {
-  // 数字雨常驻开启，无需提前 return
-  const now = Date.now();
-  const cells: string[] = [];
-  for (let col = 0; col < RAIN_COLS; col++) cells.push(rainCell(row, col, now, total));
-  return `${cells.join(" ")}  `;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -431,8 +397,6 @@ async function buildHud(ctx: any): Promise<string[]> {
   if (configs.agentsMd > 0) cfgParts.push(`${c(I_CLAUDE, BLUE)} ${c(`×${configs.agentsMd}`, BLUE)} ${dim("AGENTS.md")}`);
   if (configs.mcps > 0) cfgParts.push(`${c(I_MCP, ORANGE)} ${c(`×${configs.mcps}`, ORANGE)} ${dim("MCPs")}`);
   if (configs.skills > 0) cfgParts.push(`${c(I_SKILL, PURPLE)} ${c(`×${configs.skills}`, PURPLE)} ${dim("skills")}`);
-  if (configs.extensions > 0)
-    cfgParts.push(`${c(I_EXT, YELLOW)} ${c(`×${configs.extensions}`, YELLOW)} ${dim("extensions")}`);
   if (cfgParts.length > 0) lines.push(cfgParts.join(` ${sep} `));
 
   // ── 分隔线 + 工具调用统计 ──
@@ -463,12 +427,6 @@ async function buildHud(ctx: any): Promise<string[]> {
     const elapsed = fmtDuration(Date.now() - t.startTime);
     const target = t.target ? `: ${shortenDisplayPath(t.target, homedir(), 22)}` : "";
     lines.push(`${c(I_RUN, YELLOW)} ${c(t.name, CYAN)}${target} ${c(`(${elapsed})`, COMMENT)}`);
-  }
-
-  // ── Matrix 数字雨叠加 ──
-  const total = lines.length;
-  for (let i = 0; i < total; i++) {
-    lines[i] = `${makeRain(i, total)}${lines[i]}`;
   }
 
   return lines;
