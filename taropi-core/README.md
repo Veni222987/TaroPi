@@ -6,7 +6,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 
 | 能力 | 说明 |
 |------|------|
-| 🇨🇳 中文回答 | 追加 system prompt，强制 Agent 使用简体中文 |
+| 🎭 人物设定 | 追加 system prompt：中文回答、处事风格 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
 | 📋 Plan Mode | `/plan` / `Ctrl+Alt+P` — 只读探索模式，先出计划再执行 |
@@ -116,7 +116,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 ```
 taropi-core/
 ├── index.ts              # 入口：统一注册所有模块
-├── chinese/              # 中文强制回答
+├── character/            # 人物设定：语言习惯 / 处事风格
 ├── sub-agents/           # debugger / developer sub-agent
 ├── plan-mode/            # Plan Mode（含 README）
 ├── additionally/         # /additionally 命令
