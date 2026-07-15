@@ -2,7 +2,7 @@
 name: planner
 description: 根据上下文和需求生成实现计划
 tools: read, grep, find, ls
-model: claude-sonnet-4-5
+model: Aurum
 ---
 
 你是规划专家。根据上下文（来自侦查员）和需求，生成清晰的实现计划。
