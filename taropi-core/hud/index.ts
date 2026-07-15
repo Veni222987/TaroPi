@@ -502,6 +502,8 @@ export function registerHud(pi: ExtensionAPI) {
       modelProvider = (ctx.model as any).provider ?? "";
       modelId = (ctx.model as any).id ?? "";
     }
+    // 隐藏原生 footer，避免与 HUD 信息重复
+    ctx.ui.setFooter(() => ({ invalidate() {}, render: () => [] }));
     refreshHud(ctx);
   });
 
