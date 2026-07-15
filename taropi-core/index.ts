@@ -7,6 +7,7 @@ import { registerChinese } from "./chinese/index.js";
 import registerPermissions from "./permissions/index.js";
 import registerWebAccess from "pi-web-access/index.ts";
 import registerAskUserQuestion from "@juicesharp/rpiv-ask-user-question";
+import { registerHud } from "./hud/index.js";
 
 export default function (pi: ExtensionAPI) {
   registerSubAgents(pi);
@@ -16,4 +17,5 @@ export default function (pi: ExtensionAPI) {
   registerPermissions(pi);
   registerWebAccess(pi);
   registerAskUserQuestion(pi);
+  registerHud(pi);
 }

@@ -13,6 +13,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 📣 Additionally | `/additionally` — 执行过程中实时插入补充说明 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索、URL 抓取、GitHub 克隆、PDF 提取、YouTube 理解 |
+| 🖥️ HUD 状态面板 | 常驻显示 Git 状态、模型/上下文用量、工具调用统计等信息的赛博朋克风格 HUD |
 
 ## 安装
 
@@ -120,6 +121,7 @@ taropi-core/
 ├── plan-mode/            # Plan Mode（含 README）
 ├── additionally/         # /additionally 命令
 ├── permissions/          # 权限管控
+├── hud/                  # 常驻 HUD 状态面板
 └── plain/                # 纯文本资源：无需 TS 代码，pi 按 package.json 的 pi.prompts / pi.skills 直接识别
     ├── agents/           # subagent 定义（scout / planner / worker / reviewer），会话启动时自动同步到 ~/.pi/agent/agents/
     ├── prompts/          # 可发现的 prompt 模板（/implement 等）
