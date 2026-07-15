@@ -324,6 +324,9 @@ async function buildHud(ctx: any): Promise<string[]> {
   const dir = cwd;
   const sep = `${COMMENT}│${R}`;
 
+  // ── 顶部分隔线（与候选命令区分）──
+  lines.push(`${COMMENT}${"─".repeat(67)}${R}`);
+
   // ── 第一行：项目路径 + Git + 会话时长 ──
   const parts1: string[] = [];
   if (dir) {
