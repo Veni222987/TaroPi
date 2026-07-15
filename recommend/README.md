@@ -6,6 +6,7 @@
 |------|--------|------|
 | `AGENTS.md` | 项目根目录 `<project>/AGENTS.md`，或全局 `~/.pi/AGENTS.md` | 中文回答 + 工作原则；项目级仅对当前项目生效，全局级对所有项目生效 |
 | `permissions.json` | `~/.pi/agent/permissions.json` | taropi-permissions 权限规则；插件启动时自动读取并与默认规则合并 |
+| `web-search.json` | `~/.pi/web-search.json` | pi-web-access 的 `web_search` 默认走纯 API 搜索（`workflow: "none"`），跳过浏览器 curator；规避该包 `openCuratorBrowser` 中 `sendCuratorFallbackUpdate` 作用域 bug 导致的崩溃（`try`/`catch` 跨块引用变量） |
 
 ## 环境变量
 
