@@ -38,17 +38,6 @@ export const SEP = `${COMMENT}│${R}`;
 // DIVIDER 水平分隔线（67 字符宽）
 export const DIVIDER = `${COMMENT}${"─".repeat(67)}${R}`;
 
-// fmtDuration 将毫秒格式化为可读字符串
-export function fmtDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(0)}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${Math.round(s % 60)}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-
 /** HudTheme 传给 panel 的 render() 函数，提供统一的 ANSI 颜色工具 */
 export interface HudTheme {
   c: (text: string, color: string) => string;

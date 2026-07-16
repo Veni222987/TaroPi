@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import {
   rgb, c, dim,
   FG, COMMENT, PINK, GREEN, ORANGE, CYAN, PURPLE, YELLOW, BLUE,
-  R, D, SEP, DIVIDER, hudTheme, fmtDuration,
+  R, D, SEP, DIVIDER, hudTheme,
 } from "./theme.ts";
 import { getHudPanels, setHudRefreshCallback } from "./registry.ts";
 
@@ -175,7 +175,30 @@ function ctxPctColor(percent: number): string {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 工具白名单
+// 工具白名单 —— HUD 只展示 pi 原生工具
+// ═══════════════════════════════════════════════════════════════
+
+const TOOL_WHITELIST = new Set(["read", "write", "edit", "bash", "grep", "ls", "find"]);
+
+// ═══════════════════════════════════════════════════════════════
+// 格式化函数
+// ═══════════════════════════════════════════════════════════════
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${n}`;
+}
+
+function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(0)}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${Math.round(s % 60)}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Git 状态
