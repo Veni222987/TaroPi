@@ -20,6 +20,8 @@ import { getFinalOutput, mapWithConcurrencyLimit, MAX_CONCURRENCY, runSingleAgen
 import type { AgentConfig, SingleResult, SubagentDetails } from "../sub-agents/types.ts";
 import { discoverAgents } from "../sub-agents/agents.ts";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, writePlanMarkdown, type TodoItem } from "./utils.ts";
+import { registerHudPanel, requestHudRefresh } from "../hud/registry.ts";
+import type { HudTheme } from "../hud/theme.ts";
 
 // Tools
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
@@ -53,37 +55,36 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let todoItems: TodoItem[] = [];
 	let toolsBeforePlanMode: string[] | undefined;
 
+	// 向 HUD 注册 plan mode 状态面板
+	registerHudPanel({
+		key: "plan-mode",
+		render(theme: HudTheme): string[] {
+			if (executionMode && todoItems.length > 0) {
+				const completed = todoItems.filter((t) => t.completed).length;
+				return [
+					`${theme.c("📋", theme.YELLOW)} ${theme.c("plan", theme.YELLOW)} ${theme.c(`${completed}/${todoItems.length}`, theme.FG)}`,
+					...todoItems.map((item) =>
+						item.completed
+							? `  ${theme.c("☑", theme.GREEN)} ${theme.dim(item.text)}`
+							: `  ${theme.c("☐", theme.COMMENT)} ${item.text}`,
+					),
+				];
+			} else if (planModeEnabled) {
+				return [`${theme.c("⏸", theme.YELLOW)} ${theme.c("plan mode", theme.YELLOW)}`];
+			}
+			return [];
+		},
+	});
+
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
 		type: "boolean",
 		default: false,
 	});
 
-	function updateStatus(ctx: ExtensionContext): void {
-		// Footer status
-		if (executionMode && todoItems.length > 0) {
-			const completed = todoItems.filter((t) => t.completed).length;
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `📋 ${completed}/${todoItems.length}`));
-		} else if (planModeEnabled) {
-			ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan"));
-		} else {
-			ctx.ui.setStatus("plan-mode", undefined);
-		}
-
-		// Widget showing todo list
-		if (executionMode && todoItems.length > 0) {
-			const lines = todoItems.map((item) => {
-				if (item.completed) {
-					return (
-						ctx.ui.theme.fg("success", "☑ ") + ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text))
-					);
-				}
-				return `${ctx.ui.theme.fg("muted", "☐ ")}${item.text}`;
-			});
-			ctx.ui.setWidget("plan-todos", lines);
-		} else {
-			ctx.ui.setWidget("plan-todos", undefined);
-		}
+	// updateStatus 通知 HUD 重新渲染，plan mode 的状态由注册的 HudPanel 的 render() 提供
+	function updateStatus(_ctx?: ExtensionContext): void {
+		requestHudRefresh();
 	}
 
 	function uniqueToolNames(toolNames: string[]): string[] {

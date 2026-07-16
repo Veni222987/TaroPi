@@ -1,5 +1,8 @@
 /**
- * HUD 插件 —— 赛博朋克风格的常驻状态面板。
+ * HUD 插件 —— 赛博朋克风格的常驻状态面板，同时作为全局看板中心。
+ * 其他插件可通过 hud/registry.ts 的 registerHudPanel / requestHudRefresh
+ * 向 HUD 注册内容面板，实现统一的视觉入口。
+ *
  * 移植自 pi-shannon-statusline（https://github.com/RealAlexandreAI/pi-shannon-statusline）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -8,6 +11,12 @@ import { promisify } from "node:util";
 import { readdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import {
+  rgb, c, dim,
+  FG, COMMENT, PINK, GREEN, ORANGE, CYAN, PURPLE, YELLOW, BLUE,
+  R, D, SEP, DIVIDER, hudTheme,
+} from "./theme.ts";
+import { getHudPanels, setHudRefreshCallback } from "./registry.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,36 +66,13 @@ let cumInputTokens = 0;
 let cumCacheReadTokens = 0;
 let cumCacheWriteTokens = 0;
 
+// 缓存最新的 ctx，供 requestHudRefresh 触发时使用
+let latestCtx: any = null;
+
 // ═══════════════════════════════════════════════════════════════
-// ANSI 调色板
-// ═══════════════════════════════════════════════════════════════
-
-const R = "\x1b[0m";
-const D = "\x1b[2m";
-
-function rgb(r: number, g: number, b: number) {
-  return `\x1b[38;2;${r};${g};${b}m`;
-}
-
-// Monokai Pro 配色
-const FG = "\x1b[38;5;252m";
-const COMMENT = "\x1b[38;5;243m";
-const PINK = "\x1b[38;5;198m";
-const GREEN = "\x1b[38;5;154m";
-const ORANGE = "\x1b[38;5;208m";
-const CYAN = "\x1b[38;5;123m";
-const PURPLE = "\x1b[38;5;141m";
-const YELLOW = "\x1b[38;5;221m";
-const BLUE = "\x1b[38;5;111m";
-
-function c(text: string, color: string) {
-  return `${color}${text}${R}`;
-}
-function dim(text: string) {
-  return `${D}${text}${R}`;
-}
-
 // 图标（与 shannon-statusline 保持一致）
+// ═══════════════════════════════════════════════════════════════
+
 const I_MODEL = "λ";
 const I_PATH = "⌘";
 const I_BRANCH = "⎇";
@@ -123,7 +109,7 @@ function truncateTailSegment(segment: string, maxLen: number): string {
   return `…${base.slice(-budget)}${ext}`;
 }
 
-function shortenDisplayPath(fullPath: string, home: string, maxLen: number): string {
+export function shortenDisplayPath(fullPath: string, home: string, maxLen: number): string {
   if (!fullPath) return "";
   let display = fullPath;
   if (home && fullPath === home) return "~";
@@ -326,10 +312,10 @@ function countConfigs(dir: string) {
 async function buildHud(ctx: any): Promise<string[]> {
   const lines: string[] = [];
   const dir = cwd;
-  const sep = `${COMMENT}│${R}`;
+  const sep = SEP;
 
   // ── 顶部分隔线（与候选命令区分）──
-  lines.push(`${COMMENT}${"─".repeat(67)}${R}`);
+  lines.push(DIVIDER);
 
   // ── 第一行：项目路径 + Git + 会话时长 ──
   const parts1: string[] = [];
@@ -428,7 +414,7 @@ async function buildHud(ctx: any): Promise<string[]> {
   }
 
   if (toolLineParts.length > 0) {
-    lines.push(`${COMMENT}${"─".repeat(67)}${R}`);
+    lines.push(DIVIDER);
     lines.push(toolLineParts.join(` ${sep} `));
   }
 
@@ -440,6 +426,15 @@ async function buildHud(ctx: any): Promise<string[]> {
     lines.push(`${c(I_RUN, YELLOW)} ${c(t.name, CYAN)}${target} ${c(`(${elapsed})`, COMMENT)}`);
   }
 
+  // ── 插件注册的扩展面板 ──
+  for (const panel of getHudPanels()) {
+    const panelLines = panel.render(hudTheme);
+    if (panelLines.length > 0) {
+      lines.push(DIVIDER);
+      lines.push(...panelLines);
+    }
+  }
+
   return lines;
 }
 
@@ -447,10 +442,12 @@ async function buildHud(ctx: any): Promise<string[]> {
 // HUD 刷新
 // ═══════════════════════════════════════════════════════════════
 
-function refreshHud(ctx: any) {
-  buildHud(ctx)
+function refreshHud(ctx?: any) {
+  const target = ctx ?? latestCtx;
+  if (!target) return;
+  buildHud(target)
     .then((lines) => {
-      if (lines.length > 0) ctx.ui.setWidget("taropi-hud", lines, { placement: "belowEditor" });
+      if (lines.length > 0) target.ui.setWidget("taropi-hud", lines, { placement: "belowEditor" });
     })
     .catch(() => {});
 }
@@ -460,9 +457,11 @@ function refreshHud(ctx: any) {
 // ═══════════════════════════════════════════════════════════════
 
 export function registerHud(pi: ExtensionAPI) {
-  // 无需 slash 命令 —— HUD 常驻开启
+  // 注册刷新回调，供其他插件通过 requestHudRefresh() 触发重渲染
+  setHudRefreshCallback(() => refreshHud());
 
   pi.on("session_start", (_event, ctx) => {
+    latestCtx = ctx;
     sessionStartTime = Date.now();
     turnIndex = 0;
     cwd = ctx.cwd;
@@ -480,6 +479,7 @@ export function registerHud(pi: ExtensionAPI) {
   });
 
   pi.on("model_select", (event, ctx) => {
+    latestCtx = ctx;
     if (event.model) {
       modelProvider = (event.model as any).provider ?? "";
       modelId = (event.model as any).id ?? "";
@@ -488,11 +488,13 @@ export function registerHud(pi: ExtensionAPI) {
   });
 
   pi.on("turn_start", (event, ctx) => {
+    latestCtx = ctx;
     turnIndex = event.turnIndex ?? turnIndex + 1;
     refreshHud(ctx);
   });
 
   pi.on("tool_call", (event, ctx) => {
+    latestCtx = ctx;
     const tool: ToolRecord = { name: event.toolName, target: null, status: "running", startTime: Date.now() };
     if (event.input && typeof event.input === "object") {
       const inp = event.input as Record<string, unknown>;
@@ -506,6 +508,7 @@ export function registerHud(pi: ExtensionAPI) {
   });
 
   pi.on("tool_result", (event, ctx) => {
+    latestCtx = ctx;
     for (let i = tools.length - 1; i >= 0; i--) {
       if (tools[i]!.name === event.toolName && tools[i]!.status === "running") {
         tools[i]!.status = event.isError ? "error" : "completed";
@@ -517,6 +520,7 @@ export function registerHud(pi: ExtensionAPI) {
   });
 
   pi.on("turn_end", (event, ctx) => {
+    latestCtx = ctx;
     // 累计本轮的 token 用量（仅当 message 为带 usage 的 assistant 消息时）
     const msg = event.message as any;
     const usage = msg?.usage;
@@ -529,11 +533,13 @@ export function registerHud(pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    latestCtx = ctx;
     agents.push({ status: "running", startTime: Date.now() });
     refreshHud(ctx);
   });
 
   pi.on("agent_end", (_event, ctx) => {
+    latestCtx = ctx;
     // 将最早开始的运行中 agent 标记为完成
     const running = agents.find((a) => a.status === "running");
     if (running) {
