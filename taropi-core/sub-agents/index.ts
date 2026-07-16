@@ -34,8 +34,14 @@ import {
   runSingleAgent,
   truncateParallelOutput,
 } from "./engine.ts";
-import type { AgentScope, OnUpdateCallback, SingleResult, SubagentDetails } from "./types.ts";
-import { type AgentConfig, discoverAgents } from "./agents.ts";
+import type {
+  AgentConfig,
+  AgentScope,
+  OnUpdateCallback,
+  SingleResult,
+  SubagentDetails,
+} from "./types.ts";
+import { discoverAgents } from "./agents.ts";
 import {
   AGENT_PANEL_KEY,
   isPanelActive,

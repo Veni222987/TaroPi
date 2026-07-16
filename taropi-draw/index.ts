@@ -142,6 +142,7 @@ export default function (pi: ExtensionAPI) {
               "  3. 临时传参：draw apiKey=sk-xxx ...",
             ].join("\n"),
           }],
+          details: { error: "missing_api_key" },
           isError: true,
         };
       }
@@ -157,6 +158,7 @@ export default function (pi: ExtensionAPI) {
             type: "text",
             text: `错误：type 须为 architecture / dataflow / deployment，收到: "${type}"`,
           }],
+          details: { error: "invalid_type", type },
           isError: true,
         };
       }
@@ -183,8 +185,10 @@ export default function (pi: ExtensionAPI) {
       try {
         imageDataOrUrl = await callGptImage2(apiKey, baseUrl, fullPrompt, size, model);
       } catch (err: any) {
+        const message = err?.message ?? String(err);
         return {
-          content: [{ type: "text", text: `错误：${err?.message ?? String(err)}` }],
+          content: [{ type: "text", text: `错误：${message}` }],
+          details: { error: message },
           isError: true,
         };
       }
@@ -200,6 +204,7 @@ export default function (pi: ExtensionAPI) {
         if (!imgResp.ok) {
           return {
             content: [{ type: "text", text: `错误：图片下载失败 (HTTP ${imgResp.status})` }],
+            details: { error: `download_failed_${imgResp.status}` },
             isError: true,
           };
         }
@@ -211,6 +216,7 @@ export default function (pi: ExtensionAPI) {
           type: "text",
           text: `✅ 生成完成\n路径: ${outPath}\n类型: ${type}  模型: ${model}  尺寸: ${size}`,
         }],
+        details: { path: outPath, type, model, size },
       };
     },
   });

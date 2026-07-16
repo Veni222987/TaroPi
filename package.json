@@ -2,11 +2,16 @@
   "name": "taropi",
   "private": true,
   "description": "个人 pi coding agent 插件集合(Monorepo)",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "workspaces": [
     "taropi-core",
     "taropi-draw"
   ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "pi": {
     "extensions": [
       "./taropi-core/index.ts",
@@ -22,6 +27,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.79.8",
-    "typebox": "1.1.38"
+    "typebox": "1.1.38",
+    "typescript": "^7.0.2"
   }
 }
