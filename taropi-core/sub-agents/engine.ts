@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { withFileMutationQueue, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, OnUpdateCallback, SingleResult, SubagentDetails } from "./types.ts";
 
 export const MAX_PARALLEL_TASKS = 8;
@@ -52,6 +52,27 @@ export async function writePromptToTempFile(
     await fs.promises.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
   });
   return { dir: tmpDir, filePath };
+}
+
+// resolveModelAlias 将 models.json 中的 name 别名反查为 provider/modelId 格式，找不到则原样返回
+function resolveModelAlias(modelName: string): string {
+  try {
+    const modelsPath = path.join(getAgentDir(), "models.json");
+    const content = fs.readFileSync(modelsPath, "utf-8");
+    const config = JSON.parse(content) as {
+      providers?: Record<string, { models?: Array<{ id: string; name?: string }> }>;
+    };
+    for (const [providerId, provider] of Object.entries(config.providers ?? {})) {
+      for (const model of provider.models ?? []) {
+        if (model.name === modelName) {
+          return `${providerId}/${model.id}`;
+        }
+      }
+    }
+  } catch {
+    // 读取失败则原样返回
+  }
+  return modelName;
 }
 
 export function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -110,7 +131,7 @@ export async function runSingleAgent(
   }
 
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
-  if (agent.model) args.push("--model", agent.model);
+  if (agent.model) args.push("--model", resolveModelAlias(agent.model));
   if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
   let tmpPromptDir: string | null = null;
