@@ -24,7 +24,7 @@ import {
   getAgentDir,
   getMarkdownTheme,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Key, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   getFinalOutput,
@@ -37,14 +37,20 @@ import {
 import type { AgentScope, OnUpdateCallback, SingleResult, SubagentDetails } from "./types.ts";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
 import {
-  AGENT_PANEL_KEY,
-  isPanelActive,
-  navigateTab,
-  refreshPanel,
-  refreshPanelWithIndex,
-  showAgentPanel,
-} from "./agent-panel.ts";
+  addRefreshListener,
+  completeBatch,
+  getBatch,
+  initBatch,
+  isBatchActive,
+  navigateBatchTab,
+  updateBatchResult,
+} from "../hud/subagent-store.ts";
+import { registerHudPanel, requestHudRefresh } from "../hud/registry.ts";
+import type { HudTheme } from "../hud/theme.ts";
+import { fmtDuration } from "../hud/theme.ts";
+import { openDetailOverlay } from "./detail-overlay.ts";
 import {
+  formatTokens,
   formatToolCall,
   formatUsageStats,
   getDisplayItems,
@@ -91,27 +97,91 @@ export function register(pi: ExtensionAPI) {
   const packageAgentsDir = path.join(__dirname, "..", "plain", "agents");
   const userAgentsDir = path.join(getAgentDir(), "agents");
 
+  // 向 HUD 注册 sub-agents 看板面板
+  registerHudPanel({
+    key: "subagents",
+    render(theme: HudTheme): string[] {
+      const batch = getBatch();
+      if (!batch || batch.results.length === 0) return [];
+
+      const running = batch.results.filter((r: SingleResult) => r.exitCode === -1).length;
+      const doneCnt = batch.results.filter((r: SingleResult) => r.exitCode !== -1).length;
+      const elapsed = fmtDuration((batch.endTime ?? Date.now()) - batch.startTime);
+      const agg = batch.results.reduce(
+        (acc: { input: number; output: number; cost: number }, r: SingleResult) => {
+          acc.input += r.usage.input;
+          acc.output += r.usage.output;
+          acc.cost += r.usage.cost;
+          return acc;
+        },
+        { input: 0, output: 0, cost: 0 },
+      );
+
+      const statusStr =
+        running > 0
+          ? `${doneCnt}/${batch.results.length} done · ${running} running`
+          : `${doneCnt}/${batch.results.length} done`;
+      const usageParts: string[] = [];
+      if (agg.input)  usageParts.push(`↑${formatTokens(agg.input)}`);
+      if (agg.output) usageParts.push(`↓${formatTokens(agg.output)}`);
+      if (agg.cost)   usageParts.push(`$${agg.cost.toFixed(3)}`);
+
+      const summaryLine = [
+        `${theme.c("⚡", theme.YELLOW)} ${theme.c(batch.mode, theme.ORANGE)}`,
+        theme.c(statusStr, running > 0 ? theme.YELLOW : theme.GREEN),
+        ...(usageParts.length ? [theme.c(usageParts.join(" "), theme.COMMENT)] : []),
+        theme.c(elapsed, theme.CYAN),
+      ].join(` ${theme.sep} `);
+
+      const tabs = batch.results.map((r: SingleResult, i: number) => {
+        const icon =
+          r.exitCode === -1
+            ? theme.c("⏳", theme.YELLOW)
+            : isFailedResult(r)
+              ? theme.c("✗", theme.PINK)
+              : theme.c("✓", theme.GREEN);
+        const name = r.agent.length > 10 ? `${r.agent.slice(0, 9)}…` : r.agent;
+        const timing = batch.timings.get(i);
+        const agentElapsed = timing
+          ? fmtDuration((timing.end ?? Date.now()) - timing.start)
+          : r.exitCode === -1
+            ? fmtDuration(Date.now() - batch.startTime)
+            : "";
+        const tokenStr = r.usage.input ? `↑${formatTokens(r.usage.input)}` : "";
+        const meta = [tokenStr, agentElapsed, r.usage.turns ? `${r.usage.turns}t` : ""]
+          .filter(Boolean)
+          .join(" ");
+        const label = `${icon} ${name}${meta ? theme.dim(` ${meta}`) : ""}`;
+        return i === batch.selectedIndex ? theme.c(`[${label}]`, theme.CYAN) : theme.dim(label);
+      });
+
+      const tabLine = " " + tabs.join(theme.c("  ·  ", theme.COMMENT));
+      return [summaryLine, tabLine];
+    },
+  });
+  // 订阅 store 更新 → 触发 HUD 重渲染
+  addRefreshListener(requestHudRefresh);
+
   pi.registerShortcut("ctrl+shift+[", {
     description: "Previous subagent tab",
-    handler: async (ctx) => {
-      if (ctx.mode !== "tui" || !isPanelActive()) return;
-      navigateTab(-1);
+    handler: async (_ctx) => {
+      if (!isBatchActive()) return;
+      navigateBatchTab(-1);
     },
   });
 
   pi.registerShortcut("ctrl+shift+]", {
     description: "Next subagent tab",
-    handler: async (ctx) => {
-      if (ctx.mode !== "tui" || !isPanelActive()) return;
-      navigateTab(1);
+    handler: async (_ctx) => {
+      if (!isBatchActive()) return;
+      navigateBatchTab(1);
     },
   });
 
-  pi.registerShortcut("ctrl+shift+\\", {
-    description: "Close subagent panel",
+  pi.registerShortcut(Key.ctrl("g"), {
+    description: "Open subagent detail overlay (Ctrl+G)",
     handler: async (ctx) => {
-      if (ctx.mode !== "tui" || !isPanelActive()) return;
-      ctx.ui.setWidget(AGENT_PANEL_KEY, undefined);
+      await openDetailOverlay(ctx);
     },
   });
 
@@ -219,7 +289,14 @@ export function register(pi: ExtensionAPI) {
         const results: SingleResult[] = [];
         let previousOutput = "";
 
-        showAgentPanel(ctx, [], "chain");
+        initBatch(
+          "chain",
+          params.chain.map((s) => ({
+            agent: s.agent,
+            agentSource: agents.find((a) => a.name === s.agent)?.source ?? "unknown",
+            task: s.task,
+          })),
+        );
 
         for (let i = 0; i < params.chain.length; i++) {
           const step = params.chain[i];
@@ -229,15 +306,17 @@ export function register(pi: ExtensionAPI) {
             ? (partial) => {
                 const currentResult = partial.details?.results[0];
                 if (currentResult) {
-                  const allResults = [...results, currentResult];
-                  refreshPanelWithIndex(allResults, allResults.length - 1);
+                  updateBatchResult(i, currentResult);
                   onUpdate({
                     content: partial.content ?? [{ type: "text", text: "(running...)" }],
-                    details: makeDetails("chain")(allResults),
+                    details: makeDetails("chain")([...results, currentResult]),
                   });
                 }
               }
-            : undefined;
+            : (partial) => {
+                const currentResult = partial.details?.results[0];
+                if (currentResult) updateBatchResult(i, currentResult);
+              };
 
           const result = await runSingleAgent(
             ctx.cwd,
@@ -251,11 +330,12 @@ export function register(pi: ExtensionAPI) {
             makeDetails("chain"),
           );
           results.push(result);
-          refreshPanelWithIndex([...results], results.length - 1);
+          updateBatchResult(i, result);
 
           const isError = isFailedResult(result);
           if (isError) {
             const errorMsg = getResultOutput(result);
+            completeBatch();
             return {
               content: [
                 { type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` },
@@ -266,6 +346,7 @@ export function register(pi: ExtensionAPI) {
           }
           previousOutput = getFinalOutput(result.messages);
         }
+        completeBatch();
         return {
           content: [
             { type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" },
@@ -299,7 +380,14 @@ export function register(pi: ExtensionAPI) {
           };
         }
 
-        showAgentPanel(ctx, allResults, "parallel");
+        initBatch(
+          "parallel",
+          params.tasks.map((t) => ({
+            agent: t.agent,
+            agentSource: agents.find((a) => a.name === t.agent)?.source ?? "unknown",
+            task: t.task,
+          })),
+        );
 
         const emitParallelUpdate = () => {
           if (onUpdate) {
@@ -312,7 +400,7 @@ export function register(pi: ExtensionAPI) {
               details: makeDetails("parallel")([...allResults]),
             });
           }
-          refreshPanel([...allResults]);
+          // HUD 通过 store 监听器自动刺激，无需手动调用
         };
 
         const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
@@ -327,15 +415,18 @@ export function register(pi: ExtensionAPI) {
             (partial) => {
               if (partial.details?.results[0]) {
                 allResults[index] = partial.details.results[0];
+                updateBatchResult(index, partial.details.results[0]);
                 emitParallelUpdate();
               }
             },
             makeDetails("parallel"),
           );
           allResults[index] = result;
+          updateBatchResult(index, result);
           emitParallelUpdate();
           return result;
         });
+        completeBatch();
 
         const successCount = results.filter((r) => !isFailedResult(r)).length;
         const summaries = results.map((r) => {
@@ -357,6 +448,11 @@ export function register(pi: ExtensionAPI) {
       }
 
       if (params.agent && params.task) {
+        initBatch("single", [{
+          agent: params.agent,
+          agentSource: agents.find((a) => a.name === params.agent)?.source ?? "unknown",
+          task: params.task,
+        }]);
         const result = await runSingleAgent(
           ctx.cwd,
           agents,
@@ -365,9 +461,14 @@ export function register(pi: ExtensionAPI) {
           params.cwd,
           undefined,
           signal,
-          onUpdate,
+          (partial) => {
+            if (partial.details?.results[0]) updateBatchResult(0, partial.details.results[0]);
+            onUpdate?.(partial);
+          },
           makeDetails("single"),
         );
+        updateBatchResult(0, result);
+        completeBatch();
         const isError = isFailedResult(result);
         if (isError) {
           const errorMsg = getResultOutput(result);
