@@ -9,7 +9,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 🎭 人物设定 | 追加 system prompt：中文回答、处事风格 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
-| 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机：Aurum 制定计划、ask_user_question 循环澄清、确认后并行派发 Argentum developer；todo 独立为工具和命令 |
+| 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机（`plan/`）：Aurum 制定计划、ask_user_question 循环澄清、确认后并行派发 Argentum developer；todo 独立为工具和命令 |
 | 📣 Additionally | `/additionally` — 执行过程中实时插入补充说明 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索、URL 抓取、GitHub 克隆、PDF 提取、YouTube 理解 |
@@ -118,7 +118,7 @@ taropi-core/
 ├── index.ts              # 入口：统一注册所有模块
 ├── character/            # 人物设定：语言习惯 / 处事风格
 ├── sub-agents/           # subagent 工具（single / parallel / chain 派发）
-├── plan-with-todo/      # /plan 三阶段状态机（计划制定 / 澄清 / 并行实施）
+├── plan/                 # /plan 三阶段状态机（计划制定 / 澄清 / 并行实施）
 ├── todo/                # 独立 todo 工具、/todo 命令、HUD todo 面板
 ├── additionally/         # /additionally 命令
 ├── permissions/          # 权限管控
