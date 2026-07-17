@@ -153,3 +153,5 @@ vite.config.ts.timestamp-*
 .pi/sessions/
 .pi/tmp/
 .pi/logs/
+
+.pi

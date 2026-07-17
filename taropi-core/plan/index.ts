@@ -23,6 +23,7 @@ import { discoverAgents } from "../sub-agents/agents.ts";
 import { registerHudPanel, requestHudRefresh } from "../hud/registry.ts";
 import type { HudTheme } from "../hud/theme.ts";
 import { getTodoController, type TodoController } from "../todo/index.ts";
+import { resolveModelAlias } from "../model-alias/store.ts";
 import {
 	ADJUST_PLAN_LABEL,
 	collectAdjustmentFeedback,
@@ -141,6 +142,16 @@ function createRuntime(pi: ExtensionAPI) {
 	let savedTools: string[] | undefined;
 
 	function findModelByName(ctx: ExtensionContext, name: string): Model<any> | undefined {
+		// 优先按 model-alias 档位名（Aurum/Au 等）解析为 provider/modelId 再查找
+		const aliasTarget = resolveModelAlias(name);
+		if (aliasTarget) {
+			const slash = aliasTarget.indexOf("/");
+			if (slash > 0) {
+				const found = ctx.modelRegistry.find(aliasTarget.slice(0, slash), aliasTarget.slice(slash + 1));
+				if (found) return found;
+			}
+		}
+		// 未设置别名或解析失败时，回退按 Model.name 精确匹配
 		return ctx.modelRegistry.getAll().find((m) => m.name === name);
 	}
 

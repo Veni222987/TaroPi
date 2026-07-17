@@ -32,6 +32,8 @@ export interface SingleResult {
   stderr: string;
   usage: UsageStats;
   model?: string;
+  /** 子进程启动时间戳 */
+  startTime?: number;
   stopReason?: string;
   errorMessage?: string;
   step?: number;

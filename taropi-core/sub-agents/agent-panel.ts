@@ -1,6 +1,6 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { formatToolCall, getDisplayItems } from "./render.ts";
+import { formatTokens, formatToolCall, getDisplayItems } from "./render.ts";
 import type { SingleResult } from "./types.ts";
 
 export const AGENT_PANEL_KEY = "subagent-panel";
@@ -56,9 +56,15 @@ class AgentPanelComponent {
         : ` ${theme.fg("dim", label)} `;
     });
     lines.push(tabs.join(""));
+
+    // 选中 agent 的详情行：模型名、已用时间、token 累计
+    const selected = results[selectedIndex];
+    if (selected) {
+      const info = buildInfoLine(selected, theme);
+      if (info) lines.push(info);
+    }
     lines.push(hr);
 
-    const selected = results[selectedIndex];
     const contentLines = selected ? buildPanelLines(selected, theme, PANEL_MAX_LINES, w) : [];
     lines.push(...contentLines);
     // 用空行填满固定高度，防止内容变化时编辑器区域上下抖动
@@ -66,6 +72,34 @@ class AgentPanelComponent {
 
     return lines;
   }
+}
+
+function formatElapsed(startTime: number): string {
+  const elapsed = Math.max(0, Date.now() - startTime);
+  const seconds = Math.floor(elapsed / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+  return `${hours}h ${remainMinutes}m`;
+}
+
+function buildInfoLine(result: SingleResult, theme: Theme): string {
+  const parts: string[] = [];
+  if (result.model) parts.push(theme.fg("dim", `model: ${result.model}`));
+  if (result.startTime) {
+    const elapsed = formatElapsed(result.startTime);
+    parts.push(theme.fg("dim", `⏱ ${elapsed}`));
+  }
+  const totalTokens = result.usage.input + result.usage.output;
+  if (totalTokens > 0) {
+    parts.push(
+      theme.fg("dim", `Σ: ${formatTokens(result.usage.input)}↑/${formatTokens(result.usage.output)}↓`),
+    );
+  }
+  return parts.length > 0 ? ` ${parts.join("  ")}` : "";
 }
 
 function buildPanelLines(result: SingleResult, theme: Theme, maxLines: number, maxWidth: number): string[] {

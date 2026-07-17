@@ -6,6 +6,8 @@ import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { resolveModelAlias as resolveFromAliasStore } from "../model-alias/store.js";
 import type { AgentConfig, OnUpdateCallback, SingleResult, SubagentDetails } from "./types.ts";
+import { startRun, updateRun, finishRun } from "./state.ts";
+import { requestHudRefresh } from "../hud/registry.ts";
 
 export const MAX_PARALLEL_TASKS = 8;
 export const MAX_CONCURRENCY = 4;
@@ -109,6 +111,17 @@ export function getFinalOutput(messages: Message[]): string {
   return "";
 }
 
+// ── 状态辅助 ──
+
+function extractLatestTool(messages: Message[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i] as any;
+    if (msg.toolName) return msg.toolName;
+    if (msg.name && msg.role === "tool") return msg.name;
+  }
+  return null;
+}
+
 export async function runSingleAgent(
   defaultCwd: string,
   agents: AgentConfig[],
@@ -133,11 +146,13 @@ export async function runSingleAgent(
       stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
       step,
+      startTime: Date.now(),
     };
   }
 
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
-  if (agent.model) args.push("--model", resolveModelAlias(agent.model));
+  const resolvedModel = agent.model ? resolveModelAlias(agent.model) : undefined;
+  if (resolvedModel) args.push("--model", resolvedModel);
   if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
   let tmpPromptDir: string | null = null;
@@ -154,6 +169,10 @@ export async function runSingleAgent(
     model: agent.model,
     step,
   };
+
+  // 记录运行时状态（HUD 面板 + 全屏视图用）
+  const runKey = `${agentName}:${step ?? Date.now()}`;
+  startRun(runKey, agentName, resolvedModel ?? agent.model ?? "unknown", step);
 
   const emitUpdate = () => {
     if (onUpdate) {
@@ -216,12 +235,27 @@ export async function runSingleAgent(
               if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
             }
             emitUpdate();
+
+            // 更新 HUD 状态
+            const latestTool = extractLatestTool(currentResult.messages);
+            updateRun(runKey, {
+              latestTool: latestTool ?? undefined,
+              tokens: { ...currentResult.usage },
+            });
+            requestHudRefresh();
             break;
           }
           case "tool_result_end": {
             if (event.message) {
               currentResult.messages.push(event.message as Message);
               emitUpdate();
+
+              const toolMsg = event.message as any;
+              updateRun(runKey, {
+                latestTool: toolMsg?.toolName ?? toolMsg?.name ?? undefined,
+                tokens: { ...currentResult.usage },
+              });
+              requestHudRefresh();
             }
             break;
           }
@@ -262,7 +296,13 @@ export async function runSingleAgent(
     });
 
     currentResult.exitCode = exitCode;
-    if (wasAborted) throw new Error("Subagent was aborted");
+    if (wasAborted) {
+      finishRun(runKey, "error");
+      requestHudRefresh();
+      throw new Error("Subagent was aborted");
+    }
+    finishRun(runKey, currentResult.exitCode === 0 ? "completed" : "error");
+    requestHudRefresh();
     return currentResult;
   } finally {
     if (tmpPromptPath)
