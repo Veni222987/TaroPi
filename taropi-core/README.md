@@ -9,7 +9,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 🎭 人物设定 | 追加 system prompt：中文回答、处事风格 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
-| 📋 Plan Mode | `/plan` / `Ctrl+Alt+P` — 只读探索模式，先出计划再执行 |
+| 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机：Aurum 制定计划、ask_user_question 循环澄清、确认后并行派发 Argentum developer；todo 独立为工具和命令 |
 | 📣 Additionally | `/additionally` — 执行过程中实时插入补充说明 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索、URL 抓取、GitHub 克隆、PDF 提取、YouTube 理解 |
@@ -117,20 +117,20 @@ TaroPi 整合包，一个入口加载所有核心能力。
 taropi-core/
 ├── index.ts              # 入口：统一注册所有模块
 ├── character/            # 人物设定：语言习惯 / 处事风格
-├── sub-agents/           # debugger / developer sub-agent
-├── plan-mode/            # Plan Mode（含 README）
+├── sub-agents/           # subagent 工具（single / parallel / chain 派发）
+├── plan-with-todo/      # /plan 三阶段状态机（计划制定 / 澄清 / 并行实施）
+├── todo/                # 独立 todo 工具、/todo 命令、HUD todo 面板
 ├── additionally/         # /additionally 命令
 ├── permissions/          # 权限管控
 ├── hud/                  # 常驻 HUD 状态面板
-└── plain/                # 纯文本资源：无需 TS 代码，pi 按 package.json 的 pi.prompts / pi.skills 直接识别
-    ├── agents/           # subagent 定义（scout / planner / worker / reviewer），会话启动时自动同步到 ~/.pi/agent/agents/
-    ├── prompts/          # 可发现的 prompt 模板（/implement 等）
+└── plain/                # 纯文本资源：agents / skills
+    ├── agents/           # subagent 定义（scout / planner / developer / reviewer），会话启动时自动同步到 ~/.pi/agent/agents/
     └── skills/           # 可发现的 skill（SKILL.md）
 ```
 
-### 新增 prompt / skill
+### 新增 skill
 
-新建 `plain/prompts/<name>.md`（frontmatter 含 `description`，正文用 `$@` 接收参数）或 `plain/skills/<name>/SKILL.md`（frontmatter 含 `name` / `description`），无需改动 `package.json` 或写代码，`/reload` 即可生效。
+新建 `plain/skills/name/SKILL.md`（frontmatter 含 name / description），无需改 package.json，/reload 即可生效。
 
 ## 依赖
 

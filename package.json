@@ -18,7 +18,6 @@
       "./taropi-draw/index.ts"
     ],
     "prompts": [
-      "./taropi-core/plain/prompts",
       "./taropi-draw/prompts"
     ],
     "skills": [

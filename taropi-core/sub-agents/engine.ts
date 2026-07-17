@@ -170,6 +170,7 @@ export async function runSingleAgent(
     let wasAborted = false;
 
     const exitCode = await new Promise<number>((resolve) => {
+      // 创建新的进程
       const invocation = getPiInvocation(args);
       const proc = spawn(invocation.command, invocation.args, {
         cwd: cwd ?? defaultCwd,
@@ -187,31 +188,37 @@ export async function runSingleAgent(
           return;
         }
 
-        if (event.type === "message_end" && event.message) {
-          const msg = event.message as Message;
-          currentResult.messages.push(msg);
+        switch (event.type) {
+          case "message_end": {
+            if (!event.message) break;
+            const msg = event.message as Message;
+            currentResult.messages.push(msg);
 
-          if (msg.role === "assistant") {
-            currentResult.usage.turns++;
-            const usage = msg.usage;
-            if (usage) {
-              currentResult.usage.input += usage.input || 0;
-              currentResult.usage.output += usage.output || 0;
-              currentResult.usage.cacheRead += usage.cacheRead || 0;
-              currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-              currentResult.usage.cost += usage.cost?.total || 0;
-              currentResult.usage.contextTokens = usage.totalTokens || 0;
+            if (msg.role === "assistant") {
+              currentResult.usage.turns++;
+              const u = msg.usage;
+              if (u) {
+                currentResult.usage.input += u.input || 0;
+                currentResult.usage.output += u.output || 0;
+                currentResult.usage.cacheRead += u.cacheRead || 0;
+                currentResult.usage.cacheWrite += u.cacheWrite || 0;
+                currentResult.usage.cost += u.cost?.total || 0;
+                currentResult.usage.contextTokens = u.totalTokens || 0;
+              }
+              if (!currentResult.model && msg.model) currentResult.model = msg.model;
+              if (msg.stopReason) currentResult.stopReason = msg.stopReason;
+              if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
             }
-            if (!currentResult.model && msg.model) currentResult.model = msg.model;
-            if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-            if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
+            emitUpdate();
+            break;
           }
-          emitUpdate();
-        }
-
-        if (event.type === "tool_result_end" && event.message) {
-          currentResult.messages.push(event.message as Message);
-          emitUpdate();
+          case "tool_result_end": {
+            if (event.message) {
+              currentResult.messages.push(event.message as Message);
+              emitUpdate();
+            }
+            break;
+          }
         }
       };
 

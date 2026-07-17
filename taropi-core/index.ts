@@ -2,7 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { register as registerSubAgents } from "./sub-agents/index.js";
 import { registerAdditionally } from "./additionally/index.js";
-import registerPlanMode from "./plan-mode/index.js";
+import registerPlanWithTodo from "./plan-with-todo/index.js";
+import { registerTodo } from "./todo/index.js";
 import { registerCharacter } from "./character/index.js";
 import registerPermissions from "./permissions/index.js";
 import registerWebAccess from "pi-web-access/index.ts";
@@ -12,10 +13,11 @@ import { registerHud } from "./hud/index.js";
 export default function (pi: ExtensionAPI) {
   registerSubAgents(pi);
   registerAdditionally(pi);
-  registerPlanMode(pi);
+  registerAskUserQuestion(pi);
+  const todo = registerTodo(pi);
+  registerPlanWithTodo(pi, todo);
   registerCharacter(pi);
   registerPermissions(pi);
   registerWebAccess(pi);
-  registerAskUserQuestion(pi);
   registerHud(pi);
 }
