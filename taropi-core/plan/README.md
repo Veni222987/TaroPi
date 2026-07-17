@@ -1,4 +1,4 @@
-# Plan Workflow
+# Plan Workflow / 三阶段状态机
 
 `/plan 任务描述` 不再是一个开关式 mode，而是一台三阶段状态机，把规划到实施串起来：
 
@@ -18,6 +18,15 @@
    - 系统根据最终计划解析 todo。
    - 每个 todo 并行派发给一个 `developer` agent（`Argentum`）实现。
    - developer 只负责自己的步骤，避免互相抢改。
+
+## 文件结构
+
+```
+plan/
+├── index.ts   # 装配层：状态机定义、阶段提示词、runtime 切换、持久化、developer 派发、HUD、命令与事件钩子
+├── utils.ts   # 纯函数：计划文本解析、计划 markdown 落盘、当前轮次消息截取与澄清答案判定
+└── README.md  # 本文档
+```
 
 ## Todo 解耦
 
@@ -40,3 +49,11 @@ Todo 已从 plan workflow 里拆出去，独立成为 `todo` 工具和命令：
 - Plan 文件：`.pi/taropi/plans/时间戳-plan.md`，只保存计划文本与当前状态。
 - Todo 状态：会话 custom entry `todo-state`，由 todo 工具独立维护。
 - `/resume` 后不会恢复正在运行的 planner/developer 子进程，只保留最近的计划文件信息和 todo 状态。
+
+## 运行时 Key（勿改，保证旧会话兼容）
+
+| Key | 用途 |
+|---|---|
+| `plan-workflow` | persist entry type（兼作 HUD 面板 key） |
+| `plan-workflow-context` | 规划阶段注入的 customType（当前） |
+| `plan-with-todo-context` | 旧版注入的 customType，仅 context 事件过滤用，只读不写 |

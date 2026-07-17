@@ -54,8 +54,17 @@ function reindex(items: TodoItem[]): TodoItem[] {
   return items.map((item, index) => ({ ...item, step: index + 1 }));
 }
 
+// _controller 模块级单例，registerTodo 调用后可通过 getTodoController() 获取
+let _controller: TodoController | null = null;
+
+// getTodoController 获取 todo controller 单例，必须在 registerTodo 之后调用
+export function getTodoController(): TodoController {
+  if (!_controller) throw new Error("[todo] registerTodo has not been called yet");
+  return _controller;
+}
+
 // registerTodo 注册独立 todo 工具、命令与 HUD 面板
-export function registerTodo(pi: ExtensionAPI): TodoController {
+export function registerTodo(pi: ExtensionAPI): void {
   let items: TodoItem[] = [];
   let expanded = false;
 
@@ -225,5 +234,5 @@ export function registerTodo(pi: ExtensionAPI): TodoController {
     refresh();
   });
 
-  return controller;
+  _controller = controller;
 }
