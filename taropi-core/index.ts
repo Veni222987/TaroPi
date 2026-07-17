@@ -9,6 +9,7 @@ import registerPermissions from "./permissions/index.js";
 import registerWebAccess from "pi-web-access/index.ts";
 import registerAskUserQuestion from "@juicesharp/rpiv-ask-user-question";
 import { registerHud } from "./hud/index.js";
+import { register as registerModelAlias } from "./model-alias/index.js";
 
 export default function (pi: ExtensionAPI) {
   registerSubAgents(pi);
@@ -20,4 +21,5 @@ export default function (pi: ExtensionAPI) {
   registerPermissions(pi);
   registerWebAccess(pi);
   registerHud(pi);
+  registerModelAlias(pi);
 }

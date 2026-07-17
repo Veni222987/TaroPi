@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { resolveModelAlias as resolveFromAliasStore } from "../model-alias/store.js";
 import type { AgentConfig, OnUpdateCallback, SingleResult, SubagentDetails } from "./types.ts";
 
 export const MAX_PARALLEL_TASKS = 8;
@@ -54,8 +55,13 @@ export async function writePromptToTempFile(
   return { dir: tmpDir, filePath };
 }
 
-// resolveModelAlias 将 models.json 中的 name 别名反查为 provider/modelId 格式，找不到则原样返回
+// resolveModelAlias 先查 model-aliases.json 别名, 再查 models.json name 反查，找不到则原样返回
 function resolveModelAlias(modelName: string): string {
+  // 1) 先查 model-alias store (Au/Ag/Cu ↔ Aurum/Argentum/Cuprum)
+  const aliasResult = resolveFromAliasStore(modelName);
+  if (aliasResult) return aliasResult;
+
+  // 2) 再查 models.json 的 name 字段反向匹配
   try {
     const modelsPath = path.join(getAgentDir(), "models.json");
     const content = fs.readFileSync(modelsPath, "utf-8");
@@ -70,7 +76,7 @@ function resolveModelAlias(modelName: string): string {
       }
     }
   } catch {
-    // 读取失败则原样返回
+    // 读取失败则继续
   }
   return modelName;
 }

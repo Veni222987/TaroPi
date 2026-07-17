@@ -11,6 +11,9 @@
  * - customType = "plan-workflow-context"（当前）／ "plan-with-todo-context"（旧版，仅过滤用）
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -36,6 +39,7 @@ import {
 	updatePlanMarkdown,
 	writePlanMarkdown,
 } from "./utils.ts";
+import { plannerPrompt, clarificationPrompt } from "./prompts.ts";
 
 // --- 常量 ----------------------------------------------------------------
 
@@ -90,55 +94,45 @@ function planMessageFor(task: string, feedback?: string): string {
 
 // --- 阶段提示词 ----------------------------------------------------------
 
-// plannerPrompt 计划制定阶段 system prompt
-function plannerPrompt(): string {
-	return `[PLAN_STATE: planning]
-你是计划制定阶段的主 agent，当前模型应为 ${PLANNER_MODEL_NAME}。
-
-目标：为用户任务制定一个可执行计划。你可以读取代码、搜索代码，也可以用 subagent 工具并行派发多个 scout agent 获取必要信息。
-
-硬规则：
-- 不要修改任何代码；edit/write 工具不应使用。
-- 如果任务涉及多个模块、多个候选方案或上下文不够，优先用 subagent parallel 一次派出多个 scout，让它们分别调研不同模块/方案，降低成本并提升速度。
-- 本阶段不要问用户问题；只负责基于当前需求和已有反馈产出一版计划。
-- 最终回复必须包含一个 "Plan:" 段落，下面用编号步骤列出计划。
-- 步骤要按模块隔离性和任务复杂度拆分：能并行的拆成多个步骤；有强依赖的合并成一个步骤，因为实施阶段会按步骤并行派发 developer agent。
-
-输出格式：
-目标：一句话
-关键依据：简要列出 scout/代码调研结论
-Plan:
-1. 步骤一
-2. 步骤二
-风险：简要说明`;
-}
-
-// clarificationPrompt 澄清阶段 system prompt，需传入当前计划文本
-function clarificationPrompt(planText: string): string {
-	return `[PLAN_STATE: clarifying]
-你是澄清阶段。你必须使用 ask_user_question 工具询问用户是否需要调整当前计划，还是直接实行。
-
-当前计划：
-${planText}
-
-硬规则：
-- 必须调用且只调用一次 ask_user_question。
-- 问题必须包含 2 个选项：
-  1. label 精确为「${EXECUTE_PLAN_LABEL}」：用户认可计划，进入实施阶段。
-  2. label 精确为「${ADJUST_PLAN_LABEL}」：用户希望补充修改意见；单选问题会自动提供 Type something，用户可直接输入具体调整。
-- 工具返回后：
-  - 如果用户选择「${EXECUTE_PLAN_LABEL}」，最终回复只输出 ${PLAN_APPROVED_MARKER}，不要输出新计划。
-  - 否则最终回复输出 ${PLAN_ADJUST_MARKER}，并简要复述用户希望调整的点，不要输出新计划。
-- 不要修改代码，不要调用 subagent。`;
-}
-
-// workflowPrompt 根据当前阶段返回对应 prompt
 function workflowPrompt(state: WorkflowState): string | undefined {
-	if (state.phase === "planning") return plannerPrompt();
+	if (state.phase === "planning") return plannerPrompt(PLANNER_MODEL_NAME);
 	if (state.phase === "clarifying") return clarificationPrompt(state.planText);
 	return undefined;
 }
 
+// --- bash 写入类命令检测 -----------------------------------------------
+
+/** 常见的写入/修改操作模式 */
+const MUTATING_PATTERNS = [
+	/>/,                                 // 输出重定向（包括 cat/echo > file）
+	/>>/,                                // 追加重定向
+	/(?:^|[;&|])\s*tee\s/,              // tee 写文件
+	/(?:^|[;&|])\s*mkdir\s/,            // 创建目录
+	/(?:^|[;&|])\s*touch\s/,            // 创建文件
+	/(?:^|[;&|])\s*rm\s/,               // 删除
+	/(?:^|[;&|])\s*mv\s/,               // 移动
+	/(?:^|[;&|])\s*cp\s/,               // 复制
+	/(?:^|[;&|])\s*dd\s/,               // 原始写入
+	/(?:^|[;&|])\s*chmod\s/,            // 权限
+	/(?:^|[;&|])\s*chown\s/,            // 所有者
+	/(?:^|[;&|])\s*ln\s/,               // 链接
+	/\bsed\s+-i\b/,                      // sed -i 原地编辑
+	/(?:^|[;&|])\s*npm\s+(?:i|install|init)\b/,   // npm install
+	/(?:^|[;&|])\s*yarn\s+(?:add|init)\b/,        // yarn add
+	/(?:^|[;&|])\s*pnpm\s+(?:add|install)\b/,     // pnpm add
+	/(?:^|[;&|])\s*pip\d*\s+install\b/,          // pip install
+	/(?:^|[;&|])\s*git\s+(?:add|commit|stash\s+(?:push|pop|apply|drop|branch)|merge\s|rebase\s|cherry-pick|checkout|switch|branch\s+-[dD])\b/,
+];
+
+function isPlanningBashBlocked(command: string): string | null {
+	const trimmed = command.trim();
+	for (const re of MUTATING_PATTERNS) {
+		if (re.test(trimmed)) {
+			return "计划制定阶段禁止编辑/创建文件。只允许 ls/find/grep/cat/head/tail/git status 等只读操作。\n如果你需要读取分析代码，请使用 read/grep/find/ls 工具。";
+		}
+	}
+	return null;
+}
 // --- planner runtime 切换 ------------------------------------------------
 
 // createRuntime 创建 planner runtime 切换实例，管理模型与工具集的保存/恢复
@@ -311,6 +305,7 @@ export default function registerPlan(pi: ExtensionAPI): void {
 
 	function resetState(): void {
 		state = { phase: "idle", task: "", planText: "", adjustmentRounds: 0 };
+		todo.clear();
 		refresh();
 		persistState(pi, state);
 	}
@@ -391,6 +386,18 @@ export default function registerPlan(pi: ExtensionAPI): void {
 				return msg.customType !== "plan-workflow-context" && msg.customType !== "plan-with-todo-context";
 			}),
 		};
+	});
+
+	// planning 阶段拦截 bash 的写入类命令（只读命令放行）
+	pi.on("tool_call", async (event, ctx) => {
+		if (state.phase !== "planning") return;
+		if (event.toolName !== "bash") return;
+		const command: string = (event.input as { command?: string })?.command ?? "";
+		const reason = isPlanningBashBlocked(command);
+		if (reason) {
+			ctx.ui.notify(`⛔ 计划阶段禁止写操作: ${command.slice(0, 40)}`, "warning");
+			return { block: true, reason };
+		}
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
