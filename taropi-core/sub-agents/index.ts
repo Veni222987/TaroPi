@@ -60,7 +60,7 @@ import {
 } from "./render.ts";
 import type { DisplayItem } from "./types.ts";
 
-const COLLAPSED_ITEM_COUNT = 10;
+const COLLAPSED_ITEM_COUNT = 5;
 
 const TaskItem = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
