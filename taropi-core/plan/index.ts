@@ -2,7 +2,7 @@
  * /plan 三阶段状态机装配层
  *
  * State A: planning      - 主 agent 切换到 Aurum，可并行派发多个 scout agent 调研，产出 Plan。
- * State B: clarifying    - 主 agent 必须调用 ask_user_question，用户确认是否调整或直接实行。
+ * State B: clarifying    - 计划生成后代码直接弹出选择框（开始实现/补充内容），不经过 LLM，用户选择后同步触发状态流转。
  * State C: implementing  - 按步骤并行派发 developer agent，todo 跟踪进度。
  *
  * 运行时 key（勿改，保证旧会话兼容）：
@@ -11,9 +11,6 @@
  * - customType = "plan-workflow-context"（当前）／ "plan-with-todo-context"（旧版，仅过滤用）
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -25,27 +22,19 @@ import type { HudTheme } from "../hud/theme.ts";
 import { getTodoController, type TodoController } from "../todo/index.ts";
 import { resolveModelAlias } from "../model-alias/store.ts";
 import {
-	ADJUST_PLAN_LABEL,
-	collectAdjustmentFeedback,
-	EXECUTE_PLAN_LABEL,
 	extractPlanSection,
 	extractPlanSteps,
-	getCurrentTurnMessages,
-	hasAskedUserQuestion,
-	isExecuteSelected,
-	type MinimalMessage,
-	PLAN_ADJUST_MARKER,
-	PLAN_APPROVED_MARKER,
 	type PlanStatus,
 	updatePlanMarkdown,
 	writePlanMarkdown,
 } from "./utils.ts";
-import { plannerPrompt, clarificationPrompt } from "./prompts.ts";
+import { plannerPrompt } from "./prompts.ts";
+import { askPlanDecision } from "./ask-user-question.ts";
 
 // --- 常量 ----------------------------------------------------------------
 
 const PLANNER_MODEL_NAME = "Aurum";
-const PLANNING_EXTRA_TOOLS = ["read", "bash", "grep", "find", "ls", "subagent", "ask_user_question"];
+const PLANNING_EXTRA_TOOLS = ["read", "bash", "grep", "find", "ls", "subagent"];
 const PLANNING_DISABLED_TOOLS = new Set(["edit", "write"]);
 /** 持久化 entry type，勿改，保证旧会话兼容 */
 const PERSIST_ENTRY_TYPE = "plan-workflow";
@@ -97,7 +86,6 @@ function planMessageFor(task: string, feedback?: string): string {
 
 function workflowPrompt(state: WorkflowState): string | undefined {
 	if (state.phase === "planning") return plannerPrompt(PLANNER_MODEL_NAME);
-	if (state.phase === "clarifying") return clarificationPrompt(state.planText);
 	return undefined;
 }
 
@@ -134,26 +122,28 @@ function isPlanningBashBlocked(command: string): string | null {
 	}
 	return null;
 }
+// --- 模型查找工具 --------------------------------------------------------
+
+// findModelByName 按名称查找模型，优先通过 model-alias 档位名（Aurum/Au 等）解析
+function findModelByName(ctx: ExtensionContext, name: string): Model<any> | undefined {
+	const aliasTarget = resolveModelAlias(name);
+	if (aliasTarget) {
+		const slash = aliasTarget.indexOf("/");
+		if (slash > 0) {
+			const found = ctx.modelRegistry.find(aliasTarget.slice(0, slash), aliasTarget.slice(slash + 1));
+			if (found) return found;
+		}
+	}
+	// 未设置别名或解析失败时，回退按 Model.name 精确匹配
+	return ctx.modelRegistry.getAll().find((m) => m.name === name);
+}
+
 // --- planner runtime 切换 ------------------------------------------------
 
 // createRuntime 创建 planner runtime 切换实例，管理模型与工具集的保存/恢复
 function createRuntime(pi: ExtensionAPI) {
 	let savedModel: Model<any> | undefined;
 	let savedTools: string[] | undefined;
-
-	function findModelByName(ctx: ExtensionContext, name: string): Model<any> | undefined {
-		// 优先按 model-alias 档位名（Aurum/Au 等）解析为 provider/modelId 再查找
-		const aliasTarget = resolveModelAlias(name);
-		if (aliasTarget) {
-			const slash = aliasTarget.indexOf("/");
-			if (slash > 0) {
-				const found = ctx.modelRegistry.find(aliasTarget.slice(0, slash), aliasTarget.slice(slash + 1));
-				if (found) return found;
-			}
-		}
-		// 未设置别名或解析失败时，回退按 Model.name 精确匹配
-		return ctx.modelRegistry.getAll().find((m) => m.name === name);
-	}
 
 	// enterPlannerRuntime 切换到 planner 模型和工具集
 	async function enterPlannerRuntime(ctx: ExtensionContext): Promise<void> {
@@ -321,12 +311,6 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		persistState(pi, state);
 	}
 
-	function startClarification(): void {
-		setPhase("clarifying");
-		syncPlanMarkdown("clarifying");
-		pi.sendUserMessage("进入澄清阶段：请询问用户是否需要调整计划，或直接实行。", { deliverAs: "followUp" });
-	}
-
 	// startImplementation 进入实施阶段：解析步骤、替换 todo、派发 developer agent
 	async function startImplementation(ctx: ExtensionContext, steps: string[]): Promise<void> {
 		setPhase("implementing");
@@ -399,6 +383,38 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		};
 	});
 
+	// planning / clarifying 阶段拦截 Ctrl+P 模型切换
+	// model_select source "cycle" 表示用户通过快捷键（Ctrl+P）手动切换模型
+	pi.on("model_select", async (event, ctx) => {
+		if (state.phase !== "planning" && state.phase !== "clarifying") return;
+		if (event.source !== "cycle") return; // 只拦截手动快捷键，放行程序化 set/restore
+
+		const plannerModel = findModelByName(ctx, PLANNER_MODEL_NAME);
+		if (!plannerModel) {
+			ctx.ui.notify("计划阶段请勿切换模型。未找到 Aurum 模型，无法自动恢复。", "warning");
+			return;
+		}
+
+		// 如果当前已经是 planner 模型（理论上不应被切走，但防抖）则静默忽略
+		if (ctx.model && ctx.model.provider === plannerModel.provider && ctx.model.id === plannerModel.id) {
+			return;
+		}
+
+		// 切回 planner 模型
+		const ok = await pi.setModel(plannerModel);
+		if (ok) {
+			ctx.ui.notify(
+				`计划制定阶段已锁定模型为 ${PLANNER_MODEL_NAME}，请完成计划后再切换。`,
+				"warning",
+			);
+		} else {
+			ctx.ui.notify(
+				`计划阶段请勿切换模型。${PLANNER_MODEL_NAME} 凭证不可用，无法自动恢复。`,
+				"error",
+			);
+		}
+	});
+
 	// planning 阶段拦截 bash 的写入类命令（只读命令放行）
 	pi.on("tool_call", async (event, ctx) => {
 		if (state.phase !== "planning") return;
@@ -412,63 +428,44 @@ export default function registerPlan(pi: ExtensionAPI): void {
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
-		if (state.phase === "planning") {
-			const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
-			if (!lastAssistant) return;
-			const text = getTextContent(lastAssistant);
-			const planText = extractPlanSection(text);
-			const steps = extractPlanSteps(text);
-			if (!planText || steps.length === 0) return;
+		if (state.phase !== "planning") return;
+		const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
+		if (!lastAssistant) return;
+		const text = getTextContent(lastAssistant);
+		const planText = extractPlanSection(text);
+		const steps = extractPlanSteps(text);
+		if (!planText || steps.length === 0) return;
 
-			state.planText = planText;
-			if (!state.planMdPath || !state.planCreatedAt) {
-				const written = writePlanMarkdown(ctx.cwd, planText, "clarifying");
-				state.planMdPath = written.filePath;
-				state.planCreatedAt = written.createdAt;
-			} else {
-				syncPlanMarkdown("clarifying");
-			}
-			persistState(pi, state);
-			pi.sendMessage(
-				{ customType: "plan-draft", content: `计划已生成：${state.planMdPath}`, display: true },
-				{ triggerTurn: false },
-			);
-			startClarification();
+		state.planText = planText;
+		if (!state.planMdPath || !state.planCreatedAt) {
+			const written = writePlanMarkdown(ctx.cwd, planText, "clarifying");
+			state.planMdPath = written.filePath;
+			state.planCreatedAt = written.createdAt;
+		}
+		pi.sendMessage(
+			{ customType: "plan-draft", content: `计划已生成：${state.planMdPath}`, display: true },
+			{ triggerTurn: false },
+		);
+		setPhase("clarifying");
+		syncPlanMarkdown("clarifying");
+
+		// 直接弹选择框（开始实现/补充内容），不经过 LLM，用户选完立即同步触发状态流转
+		const decision = await askPlanDecision(ctx);
+		if (decision.execute) {
+			await startImplementation(ctx, steps);
 			return;
 		}
 
-		if (state.phase === "clarifying") {
-			const turnMessages = getCurrentTurnMessages(event.messages as unknown as MinimalMessage[]);
-			if (!hasAskedUserQuestion(turnMessages)) {
-				pi.sendUserMessage(
-					"澄清阶段必须调用 ask_user_question 询问用户是否调整或实行，请现在调用。",
-					{ deliverAs: "followUp" },
-				);
-				return;
-			}
-			if (isExecuteSelected(turnMessages)) {
-				const steps = extractPlanSteps(`Plan:\n${state.planText}`);
-				if (steps.length === 0) {
-					ctx.ui.notify("当前计划没有解析出可执行步骤，回到计划制定阶段。", "warning");
-					setPhase("planning");
-					pi.sendUserMessage(
-						"上一版计划没有可解析的编号步骤，请重新输出包含 Plan: 的编号计划。",
-						{ deliverAs: "followUp" },
-					);
-					return;
-				}
-				await startImplementation(ctx, steps);
-				return;
-			}
-
-			const feedback =
-				collectAdjustmentFeedback(turnMessages) ||
-				"用户希望调整计划，但没有提供更具体的说明。请先根据当前上下文补足最可能需要确认的点，再出新版计划。";
-			state.adjustmentRounds++;
-			setPhase("planning");
-			syncPlanMarkdown("planning");
-			pi.sendUserMessage(planMessageFor(state.task, feedback), { deliverAs: "followUp" });
-		}
+		state.adjustmentRounds++;
+		setPhase("planning");
+		syncPlanMarkdown("planning");
+		pi.sendUserMessage(
+			planMessageFor(
+				state.task,
+				decision.feedback || "用户希望调整计划，但没有提供更具体的说明。请先根据当前上下文补足最可能需要确认的点，再出新版计划。",
+			),
+			{ deliverAs: "followUp" },
+		);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {

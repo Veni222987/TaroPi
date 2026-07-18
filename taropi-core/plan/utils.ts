@@ -5,10 +5,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export const EXECUTE_PLAN_LABEL = "实行当前计划";
-export const ADJUST_PLAN_LABEL = "补充调整意见";
-export const PLAN_APPROVED_MARKER = "[PLAN_APPROVED]";
-export const PLAN_ADJUST_MARKER = "[PLAN_ADJUST_REQUEST]";
+export const EXECUTE_PLAN_LABEL = "开始实现";
+export const ADJUST_PLAN_LABEL = "补充内容";
 
 export type PlanStatus = "planning" | "clarifying" | "implementing" | "completed";
 
@@ -71,8 +69,8 @@ export function writePlanMarkdown(cwd: string, planText: string, status: PlanSta
 
   const createdAt = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
-  const ts = `${createdAt.getFullYear()}-${pad(createdAt.getMonth() + 1)}-${pad(createdAt.getDate())}T${pad(createdAt.getHours())}${pad(createdAt.getMinutes())}${pad(createdAt.getSeconds())}`;
-  const filePath = path.join(plansDir, `${ts}-plan.md`);
+  const ts = `${createdAt.getFullYear()}${pad(createdAt.getMonth() + 1)}${pad(createdAt.getDate())}T${pad(createdAt.getHours())}${pad(createdAt.getMinutes())}${pad(createdAt.getSeconds())}`;
+  const filePath = path.join(plansDir, `${ts}plan.md`);
 
   fs.writeFileSync(filePath, renderPlanMarkdown(planText, createdAt, status), "utf-8");
   return { filePath, createdAt };
@@ -83,59 +81,3 @@ export function updatePlanMarkdown(filePath: string, planText: string, createdAt
   fs.writeFileSync(filePath, renderPlanMarkdown(planText, createdAt, status, new Date()), "utf-8");
 }
 
-export interface MinimalMessage {
-  role: string;
-  toolName?: string;
-  details?: unknown;
-}
-
-export interface QuestionAnswerLike {
-  kind?: string;
-  answer?: string | null;
-  selected?: string[];
-  question?: string;
-}
-
-// getCurrentTurnMessages 截取当前轮次消息
-export function getCurrentTurnMessages<T extends MinimalMessage>(messages: T[]): T[] {
-  const result: T[] = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    result.unshift(m);
-    if (m.role === "user") break;
-  }
-  return result;
-}
-
-// getAskUserAnswers 提取当前轮次 ask_user_question 的答案
-export function getAskUserAnswers(turnMessages: MinimalMessage[]): QuestionAnswerLike[] {
-  const answers: QuestionAnswerLike[] = [];
-  for (const m of turnMessages) {
-    if (m.role !== "toolResult" || m.toolName !== "ask_user_question") continue;
-    const details = m.details as { answers?: QuestionAnswerLike[] } | undefined;
-    if (Array.isArray(details?.answers)) answers.push(...details.answers);
-  }
-  return answers;
-}
-
-// hasAskedUserQuestion 判断当前轮次是否已调用 ask_user_question
-export function hasAskedUserQuestion(turnMessages: MinimalMessage[]): boolean {
-  return getAskUserAnswers(turnMessages).length > 0;
-}
-
-// isExecuteSelected 判断用户是否选择实行当前计划
-export function isExecuteSelected(turnMessages: MinimalMessage[]): boolean {
-  return getAskUserAnswers(turnMessages).some((a) => a.answer === EXECUTE_PLAN_LABEL || a.selected?.includes(EXECUTE_PLAN_LABEL));
-}
-
-// collectAdjustmentFeedback 汇总用户对计划的调整反馈
-export function collectAdjustmentFeedback(turnMessages: MinimalMessage[]): string {
-  const fragments: string[] = [];
-  for (const answer of getAskUserAnswers(turnMessages)) {
-    if (answer.answer && answer.answer !== EXECUTE_PLAN_LABEL) fragments.push(answer.answer);
-    if (answer.selected) {
-      fragments.push(...answer.selected.filter((item) => item !== EXECUTE_PLAN_LABEL));
-    }
-  }
-  return [...new Set(fragments)].join("\n").trim();
-}

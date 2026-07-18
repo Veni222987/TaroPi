@@ -4,13 +4,6 @@
  * 从 index.ts 抽离出来，不夹在业务逻辑里。
  */
 
-import {
-	ADJUST_PLAN_LABEL,
-	EXECUTE_PLAN_LABEL,
-	PLAN_ADJUST_MARKER,
-	PLAN_APPROVED_MARKER,
-} from "./utils.ts";
-
 /** 计划制定阶段 system prompt */
 export function plannerPrompt(modelName: string): string {
 	return `[PLAN_STATE: planning]
@@ -33,23 +26,4 @@ Plan:
 1. 步骤一
 2. 步骤二
 风险：简要说明`;
-}
-
-/** 澄清阶段 system prompt */
-export function clarificationPrompt(planText: string): string {
-	return `[PLAN_STATE: clarifying]
-你是澄清阶段。你必须使用 ask_user_question 工具询问用户是否需要调整当前计划，还是直接实行。
-
-当前计划：
-${planText}
-
-硬规则：
-- 必须调用且只调用一次 ask_user_question。
-- 问题必须包含 2 个选项：
-  1. label 精确为「${EXECUTE_PLAN_LABEL}」：用户认可计划，进入实施阶段。
-  2. label 精确为「${ADJUST_PLAN_LABEL}」：用户希望补充修改意见；单选问题会自动提供 Type something，用户可直接输入具体调整。
-- 工具返回后：
-  - 如果用户选择「${EXECUTE_PLAN_LABEL}」，最终回复只输出 ${PLAN_APPROVED_MARKER}，不要输出新计划。
-  - 否则最终回复输出 ${PLAN_ADJUST_MARKER}，并简要复述用户希望调整的点，不要输出新计划。
-- 不要修改代码，不要调用 subagent。`;
 }
