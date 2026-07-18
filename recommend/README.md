@@ -7,6 +7,7 @@
 | `AGENTS.md` | 项目根目录 `<project>/AGENTS.md`，或全局 `~/.pi/AGENTS.md` | 中文回答 + 工作原则；项目级仅对当前项目生效，全局级对所有项目生效 |
 | `permissions.json` | `~/.pi/agent/permissions.json` | taropi-permissions 权限规则；插件启动时自动读取并与默认规则合并 |
 | `web-search.json` | `~/.pi/web-search.json` | pi-web-access 的 `web_search` 默认走纯 API 搜索（`workflow: "none"`），跳过浏览器 curator；规避该包 `openCuratorBrowser` 中 `sendCuratorFallbackUpdate` 作用域 bug 导致的崩溃（`try`/`catch` 跨块引用变量） |
+| `keybindings.json` | `~/.pi/agent/keybindings.json` | 将中断从 `Esc` 改为 `Ctrl+C`（更符合终端习惯），`Esc` 改为清空编辑器；复制后 `/reload` 生效 |
 
 ## sub-agent 模型档位（Aurum / Argentum / Cuprum）
 
@@ -58,6 +59,30 @@
 ```
 
 把对应片段**合并**进你已有的 `~/.pi/agent/models.json`（不要整体覆盖，否则会丢失你原有的 provider 配置）。`sol`/`terra`/`luna` 只是默认示例，换成你自己想用的任意模型 id 都可以，只要 `name` 字段对应上 `Aurum`/`Argentum`/`Cuprum` 即可。
+
+## 快捷键调整（keybindings.json）
+
+默认快捷键有两个反直觉的设计：
+
+- `Esc` → `app.interrupt`（中断），但终端用户肌肉记忆是 `Ctrl+C`
+- `Ctrl+C` → `app.clear`（清空编辑器），导致按 `Ctrl+C` 想中断却清了输入
+
+`keybindings.json` 把两者互换：
+
+| 按键 | 默认行为 | 调整后行为 |
+|------|----------|------------|
+| `Ctrl+C` | 清空编辑器 (`app.clear`) | 中断 / 取消 (`app.interrupt`) |
+| `Esc` | 中断 / 取消 (`app.interrupt`) | 清空编辑器 (`app.clear`) |
+
+> **注意**：pi TUI 已拦截 raw input，`Ctrl+C` 作为中断绑定不会触发终端 SIGINT。如果后续 pi 版本对 `app.interrupt` 的默认绑定做了调整，记得对比合并，避免覆盖新功能快捷键。
+
+安装：
+
+```bash
+cp recommend/keybindings.json ~/.pi/agent/keybindings.json
+```
+
+然后在 pi 中执行 `/reload` 即可生效，无需重启 session。
 
 ## 环境变量
 
