@@ -131,7 +131,7 @@ export function registerTodo(pi: ExtensionAPI): void {
       const shown = pending.slice(0, HUD_TODO_LIMIT);
       const rest = pending.length - shown.length;
       const lines = [header, ...shown.map((item) => `  ${theme.c("☐", theme.COMMENT)} ${item.text}`)];
-      if (rest > 0) lines.push(`  ${theme.dim(`⋯ 还有 ${rest} 条未完成（Ctrl+T 展开）`)}`);
+      if (rest > 0) lines.push(`  ${theme.dim(`⋯ 还有 ${rest} 条未完成（Ctrl+Shift+T 展开）`)}`);
       return lines;
     },
   });
@@ -213,7 +213,7 @@ export function registerTodo(pi: ExtensionAPI): void {
     handler: async (_args, ctx) => ctx.ui.notify(controller.renderPlain(), "info"),
   });
 
-  pi.registerShortcut(Key.ctrl("t"), {
+  pi.registerShortcut(Key.ctrlShift("t"), {
     description: "Expand/collapse HUD todo list",
     handler: async () => {
       expanded = !expanded;
