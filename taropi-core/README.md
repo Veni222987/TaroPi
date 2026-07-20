@@ -10,6 +10,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
 | 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机（`plan/`）：Aurum 制定计划、选择框（开始实现/补充内容）循环澄清、确认后并行派发 Argentum developer；todo 独立为工具和命令 |
+| 🔁 Loop | `/loop create\|start\|stop\|list\|status\|edit\|remove`（`loop/`）：crontab 驱动的定时循环，复用 agent 定义按固定间隔跑一个任务，每轮独立进程/独立 session，任务文本随时可编辑 |
 | 📣 Additionally | `/additionally` — 执行过程中实时插入补充说明 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索、URL 抓取、GitHub 克隆、PDF 提取、YouTube 理解 |
@@ -119,6 +120,7 @@ taropi-core/
 ├── character/            # 人物设定：语言习惯 / 处事风格
 ├── sub-agents/           # subagent 工具（single / parallel / chain 派发）
 ├── plan/                 # /plan 三阶段状态机（计划制定 / 澄清 / 并行实施）
+├── loop/                 # /loop crontab 驱动的定时循环（复用 agent 定义，独立进程/独立 session）
 ├── todo/                # 独立 todo 工具、/todo 命令、HUD todo 面板
 ├── additionally/         # /additionally 命令
 ├── permissions/          # 权限管控
