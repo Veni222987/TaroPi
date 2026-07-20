@@ -15,7 +15,7 @@ export { resolveModelAlias } from "./store.js";
  */
 export function register(pi: ExtensionAPI): void {
   pi.registerCommand("model-alias", {
-    description: "设置三档模型别名（Au/金·Ag/银·Cu/铜），影响 plan/sub-agent 等插件",
+    description: "设置三档模型别名（Au/金·Ag/银·Cu/铜）",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
 
