@@ -114,11 +114,8 @@ async function openTuiSettings(ctx: any): Promise<void> {
     ),
     {
       overlay: true,
-      overlayOptions: {
-        anchor: "center",
-        width: "50%",
-        minWidth: 40,
-      },
+      // 宽度必须与组件实际绘制宽度一致；百分比容器会让内容贴在容器左侧，视觉上偏左。
+      overlayOptions: { anchor: "center", width: 56 },
     },
   );
 
@@ -144,12 +141,8 @@ async function openTuiSettings(ctx: any): Promise<void> {
     ),
     {
       overlay: true,
-      overlayOptions: {
-        anchor: "center",
-        width: "60%",
-        minWidth: 40,
-        maxHeight: "80%",
-      },
+      // 固定为组件最大宽度，避免宽屏下出现过大的透明渲染区域。
+      overlayOptions: { anchor: "center", width: 64, maxHeight: "80%" },
     },
   );
 
