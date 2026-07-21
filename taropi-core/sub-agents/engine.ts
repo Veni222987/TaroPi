@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -5,14 +6,42 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { resolveModelAlias as resolveFromAliasStore } from "../model-alias/store.js";
-import type { AgentConfig, OnUpdateCallback, SingleResult, SubagentDetails } from "./types.ts";
-import { startRun, updateRun, finishRun } from "./state.ts";
+import type { AgentConfig, OnUpdateCallback, SingleResult, SubagentDetails, UsageStats } from "./types.ts";
+import {
+  appendRunLog,
+  finishRun,
+  getRun,
+  startRun,
+  startToolCall,
+  summarizeValue,
+  updateRun,
+  updateToolCall,
+} from "./state.ts";
 import { requestHudRefresh } from "../hud/registry.ts";
 
 export const MAX_PARALLEL_TASKS = 8;
 export const MAX_CONCURRENCY = 4;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
+const UPDATE_INTERVAL_MS = 80;
+let pendingHudRefresh: ReturnType<typeof setTimeout> | undefined;
 
+// scheduleHudRefresh 将所有并发 Agent 的高频事件合并为一次 HUD 重绘。
+function scheduleHudRefresh(immediate = false): void {
+  if (immediate) {
+    if (pendingHudRefresh) clearTimeout(pendingHudRefresh);
+    pendingHudRefresh = undefined;
+    requestHudRefresh();
+    return;
+  }
+  if (pendingHudRefresh) return;
+  pendingHudRefresh = setTimeout(() => {
+    pendingHudRefresh = undefined;
+    requestHudRefresh();
+  }, UPDATE_INTERVAL_MS);
+  pendingHudRefresh.unref?.();
+}
+
+// truncateParallelOutput 限制并行任务最终摘要的字节数，避免工具结果撑爆上下文。
 export function truncateParallelOutput(output: string): string {
   const byteLength = Buffer.byteLength(output, "utf8");
   if (byteLength <= PER_TASK_OUTPUT_CAP) return output;
@@ -24,6 +53,7 @@ export function truncateParallelOutput(output: string): string {
   return `${truncated}\n\n[Output truncated: ${byteLength - Buffer.byteLength(truncated, "utf8")} bytes omitted. Full output preserved in tool details.]`;
 }
 
+// mapWithConcurrencyLimit 按指定并发度处理数组，并保持结果顺序。
 export async function mapWithConcurrencyLimit<TIn, TOut>(
   items: TIn[],
   concurrency: number,
@@ -44,6 +74,7 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
   return results;
 }
 
+// writePromptToTempFile 将子 Agent system prompt 写入权限受限的临时文件。
 export async function writePromptToTempFile(
   agentName: string,
   prompt: string,
@@ -57,13 +88,11 @@ export async function writePromptToTempFile(
   return { dir: tmpDir, filePath };
 }
 
-// resolveModelAlias 先查 model-aliases.json 别名, 再查 models.json name 反查，找不到则原样返回
+// resolveModelAlias 先查模型别名，再尝试按 models.json 展示名反查实际模型 ID。
 function resolveModelAlias(modelName: string): string {
-  // 1) 先查 model-alias store (Au/Ag/Cu ↔ Aurum/Argentum/Cuprum)
   const aliasResult = resolveFromAliasStore(modelName);
   if (aliasResult) return aliasResult;
 
-  // 2) 再查 models.json 的 name 字段反向匹配
   try {
     const modelsPath = path.join(getAgentDir(), "models.json");
     const content = fs.readFileSync(modelsPath, "utf-8");
@@ -72,17 +101,16 @@ function resolveModelAlias(modelName: string): string {
     };
     for (const [providerId, provider] of Object.entries(config.providers ?? {})) {
       for (const model of provider.models ?? []) {
-        if (model.name === modelName) {
-          return `${providerId}/${model.id}`;
-        }
+        if (model.name === modelName) return `${providerId}/${model.id}`;
       }
     }
   } catch {
-    // 读取失败则继续
+    // 无模型配置时按原样传递给 pi。
   }
   return modelName;
 }
 
+// getPiInvocation 根据当前运行时选择可复用的 pi 启动命令。
 export function getPiInvocation(args: string[]): { command: string; args: string[] } {
   const currentScript = process.argv[1];
   const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
@@ -92,36 +120,56 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 
   const execName = path.basename(process.execPath).toLowerCase();
   const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-  if (!isGenericRuntime) {
-    return { command: process.execPath, args };
-  }
-
+  if (!isGenericRuntime) return { command: process.execPath, args };
   return { command: "pi", args };
 }
 
+// getFinalOutput 返回最后一条 assistant 文本输出。
 export function getFinalOutput(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") return part.text;
-      }
+    if (msg.role !== "assistant") continue;
+    for (const part of msg.content) {
+      if (part.type === "text") return part.text;
     }
   }
   return "";
 }
 
-// ── 状态辅助 ──
-
-function extractLatestTool(messages: Message[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i] as any;
-    if (msg.toolName) return msg.toolName;
-    if (msg.name && msg.role === "tool") return msg.name;
-  }
-  return null;
+// getAssistantText 提取一条 assistant 消息中已累计的文本内容。
+function getAssistantText(message: unknown): string {
+  const candidate = message as { role?: string; content?: Array<{ type?: string; text?: string }> } | undefined;
+  if (candidate?.role !== "assistant") return "";
+  return (candidate.content ?? [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text ?? "")
+    .join("\n");
 }
 
+// updateUsage 将完整 assistant 消息中的 usage 累加到当前任务。
+function updateUsage(result: SingleResult, message: Message): void {
+  if (message.role !== "assistant") return;
+  result.usage.turns++;
+  const usage = message.usage;
+  if (usage) {
+    result.usage.input += usage.input || 0;
+    result.usage.output += usage.output || 0;
+    result.usage.cacheRead += usage.cacheRead || 0;
+    result.usage.cacheWrite += usage.cacheWrite || 0;
+    result.usage.cost += usage.cost?.total || 0;
+    result.usage.contextTokens = usage.totalTokens || 0;
+  }
+  if (!result.model && message.model) result.model = message.model;
+  if (message.stopReason) result.stopReason = message.stopReason;
+  if (message.errorMessage) result.errorMessage = message.errorMessage;
+}
+
+// cloneUsage 复制 usage，避免状态存储与运行结果共用可变对象。
+function cloneUsage(usage: UsageStats): UsageStats {
+  return { ...usage };
+}
+
+// runSingleAgent 启动一个隔离的 pi 子进程并持续推送其运行状态。
 export async function runSingleAgent(
   defaultCwd: string,
   agents: AgentConfig[],
@@ -133,20 +181,36 @@ export async function runSingleAgent(
   onUpdate: OnUpdateCallback | undefined,
   makeDetails: (results: SingleResult[]) => SubagentDetails,
 ): Promise<SingleResult> {
-  const agent = agents.find((a) => a.name === agentName);
+  const agent = agents.find((item) => item.name === agentName);
+  const startTime = Date.now();
+  const runId = randomUUID();
 
   if (!agent) {
-    const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
+    const available = agents.map((item) => `"${item.name}"`).join(", ") || "none";
+    const errorMessage = `Unknown agent: "${agentName}". Available agents: ${available}.`;
+    startRun({
+      runId,
+      name: agentName,
+      task,
+      agentSource: "unknown",
+      actualModel: "unknown",
+      step,
+      startTime,
+    });
+    finishRun(runId, "error", errorMessage);
+    scheduleHudRefresh(true);
     return {
+      runId,
       agent: agentName,
       agentSource: "unknown",
       task,
       exitCode: 1,
       messages: [],
-      stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
+      stderr: errorMessage,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
       step,
-      startTime: Date.now(),
+      startTime,
+      errorMessage,
     };
   }
 
@@ -157,30 +221,58 @@ export async function runSingleAgent(
 
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
-
   const currentResult: SingleResult = {
+    runId,
     agent: agentName,
     agentSource: agent.source,
     task,
-    exitCode: 0,
+    exitCode: -1,
     messages: [],
     stderr: "",
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
     model: agent.model,
     step,
+    startTime,
   };
 
-  // 记录运行时状态（HUD 面板 + 全屏视图用）
-  const runKey = `${agentName}:${step ?? Date.now()}`;
-  startRun(runKey, agentName, resolvedModel ?? agent.model ?? "unknown", step);
+  startRun({
+    runId,
+    name: agentName,
+    task,
+    agentSource: agent.source,
+    actualModel: resolvedModel ?? agent.model ?? "unknown",
+    model: agent.model,
+    step,
+    startTime,
+  });
 
-  const emitUpdate = () => {
-    if (onUpdate) {
-      onUpdate({
-        content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
-        details: makeDetails([currentResult]),
-      });
+  let pendingUpdate: ReturnType<typeof setTimeout> | undefined;
+  const dispatchUpdate = () => {
+    if (!onUpdate) return;
+    onUpdate({
+      content: [{ type: "text", text: getRun(runId)?.streamText || getFinalOutput(currentResult.messages) || "(running...)" }],
+      details: makeDetails([{ ...currentResult, usage: cloneUsage(currentResult.usage) }]),
+    });
+  };
+  const emitUpdate = (immediate = false) => {
+    if (!onUpdate) return;
+    if (immediate) {
+      if (pendingUpdate) clearTimeout(pendingUpdate);
+      pendingUpdate = undefined;
+      dispatchUpdate();
+      return;
     }
+    if (!pendingUpdate) {
+      pendingUpdate = setTimeout(() => {
+        pendingUpdate = undefined;
+        dispatchUpdate();
+      }, UPDATE_INTERVAL_MS);
+    }
+  };
+  const refreshRun = () => {
+    updateRun(runId, { usage: currentResult.usage });
+    scheduleHudRefresh();
+    emitUpdate();
   };
 
   try {
@@ -195,7 +287,6 @@ export async function runSingleAgent(
     let wasAborted = false;
 
     const exitCode = await new Promise<number>((resolve) => {
-      // 创建新的进程
       const invocation = getPiInvocation(args);
       const proc = spawn(invocation.command, invocation.args, {
         cwd: cwd ?? defaultCwd,
@@ -214,48 +305,60 @@ export async function runSingleAgent(
         }
 
         switch (event.type) {
+          case "message_start":
+            if (event.message?.role === "assistant") updateRun(runId, { streamText: "" });
+            break;
+          case "message_update": {
+            const streamText = getAssistantText(event.message);
+            if (streamText) updateRun(runId, { streamText });
+            scheduleHudRefresh();
+            emitUpdate();
+            break;
+          }
           case "message_end": {
             if (!event.message) break;
-            const msg = event.message as Message;
-            currentResult.messages.push(msg);
-
-            if (msg.role === "assistant") {
-              currentResult.usage.turns++;
-              const u = msg.usage;
-              if (u) {
-                currentResult.usage.input += u.input || 0;
-                currentResult.usage.output += u.output || 0;
-                currentResult.usage.cacheRead += u.cacheRead || 0;
-                currentResult.usage.cacheWrite += u.cacheWrite || 0;
-                currentResult.usage.cost += u.cost?.total || 0;
-                currentResult.usage.contextTokens = u.totalTokens || 0;
-              }
-              if (!currentResult.model && msg.model) currentResult.model = msg.model;
-              if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-              if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
+            const message = event.message as Message;
+            currentResult.messages.push(message);
+            updateUsage(currentResult, message);
+            const text = getAssistantText(message);
+            if (text) {
+              updateRun(runId, { streamText: "" });
+              appendRunLog(runId, "message", text);
             }
-            emitUpdate();
-
-            // 更新 HUD 状态
-            const latestTool = extractLatestTool(currentResult.messages);
-            updateRun(runKey, {
-              latestTool: latestTool ?? undefined,
-              tokens: { ...currentResult.usage },
-            });
-            requestHudRefresh();
+            refreshRun();
+            break;
+          }
+          case "tool_execution_start": {
+            if (event.toolCallId && event.toolName) {
+              startToolCall(runId, event.toolCallId, event.toolName, event.args ?? {});
+              refreshRun();
+            }
+            break;
+          }
+          case "tool_execution_update": {
+            if (event.toolCallId) {
+              updateToolCall(runId, event.toolCallId, { partialResult: event.partialResult });
+              refreshRun();
+            }
+            break;
+          }
+          case "tool_execution_end": {
+            if (event.toolCallId) {
+              updateToolCall(runId, event.toolCallId, {
+                status: event.isError ? "error" : "completed",
+                result: event.result,
+                isError: Boolean(event.isError),
+                endTime: Date.now(),
+              });
+              refreshRun();
+            }
             break;
           }
           case "tool_result_end": {
             if (event.message) {
               currentResult.messages.push(event.message as Message);
-              emitUpdate();
-
-              const toolMsg = event.message as any;
-              updateRun(runKey, {
-                latestTool: toolMsg?.toolName ?? toolMsg?.name ?? undefined,
-                tokens: { ...currentResult.usage },
-              });
-              requestHudRefresh();
+              appendRunLog(runId, "tool", `tool result: ${summarizeValue(event.message)}`);
+              refreshRun();
             }
             break;
           }
@@ -268,54 +371,68 @@ export async function runSingleAgent(
         buffer = lines.pop() || "";
         for (const line of lines) processLine(line);
       });
-
       proc.stderr.on("data", (data) => {
         currentResult.stderr += data.toString();
       });
-
       proc.on("close", (code) => {
         if (buffer.trim()) processLine(buffer);
         resolve(code ?? 0);
       });
-
-      proc.on("error", () => {
+      proc.on("error", (error) => {
+        currentResult.errorMessage ??= error.message;
+        currentResult.stderr += `${currentResult.stderr ? "\n" : ""}${error.message}`;
         resolve(1);
       });
 
       if (signal) {
-        const killProc = () => {
+        const killProcess = () => {
           wasAborted = true;
           proc.kill("SIGTERM");
           setTimeout(() => {
             if (!proc.killed) proc.kill("SIGKILL");
           }, 5000);
         };
-        if (signal.aborted) killProc();
-        else signal.addEventListener("abort", killProc, { once: true });
+        if (signal.aborted) killProcess();
+        else signal.addEventListener("abort", killProcess, { once: true });
       }
     });
 
     currentResult.exitCode = exitCode;
     if (wasAborted) {
-      finishRun(runKey, "error");
-      requestHudRefresh();
+      currentResult.stopReason = "aborted";
+      finishRun(runId, "aborted", "Subagent was aborted");
+      emitUpdate(true);
+      scheduleHudRefresh(true);
       throw new Error("Subagent was aborted");
     }
-    finishRun(runKey, currentResult.exitCode === 0 ? "completed" : "error");
-    requestHudRefresh();
+    const status = currentResult.exitCode === 0 ? "completed" : "error";
+    finishRun(runId, status, currentResult.errorMessage || currentResult.stderr || undefined);
+    emitUpdate(true);
+    scheduleHudRefresh(true);
     return currentResult;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (currentResult.exitCode === -1) currentResult.exitCode = 1;
+    currentResult.errorMessage ??= errorMessage;
+    if (getRun(runId)?.status === "running") {
+      finishRun(runId, "error", currentResult.errorMessage);
+      scheduleHudRefresh(true);
+      emitUpdate(true);
+    }
+    throw error;
   } finally {
+    if (pendingUpdate) clearTimeout(pendingUpdate);
     if (tmpPromptPath)
       try {
         fs.unlinkSync(tmpPromptPath);
       } catch {
-        /* ignore */
+        // 临时文件已被清理时无需处理。
       }
     if (tmpPromptDir)
       try {
         fs.rmdirSync(tmpPromptDir);
       } catch {
-        /* ignore */
+        // 临时目录已被清理时无需处理。
       }
   }
 }
