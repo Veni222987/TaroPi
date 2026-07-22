@@ -1,7 +1,7 @@
 /**
  * /plan 三阶段状态机装配层
  *
- * State A: planning      - 主 agent 切换到 Aurum，可并行派发多个 scout agent 调研，产出 Plan。
+ * State A: planning      - 主 agent 切换到 Aurum，独立完成调研并产出 Plan（不派发 subagent）。
  * State B: clarifying    - 计划生成后代码直接弹出选择框（开始实现/补充内容），不经过 LLM，用户选择后同步触发状态流转。
  * State C: implementing  - 按步骤并行派发 developer agent，todo 跟踪进度。
  *
@@ -34,7 +34,7 @@ import { askPlanDecision } from "./ask-user-question.ts";
 // --- 常量 ----------------------------------------------------------------
 
 const PLANNER_MODEL_NAME = "Aurum";
-const PLANNING_EXTRA_TOOLS = ["read", "bash", "grep", "find", "ls", "subagent"];
+const PLANNING_EXTRA_TOOLS = ["read", "bash", "grep", "find", "ls"];
 const PLANNING_DISABLED_TOOLS = new Set(["edit", "write"]);
 /** 持久化 entry type，勿改，保证旧会话兼容 */
 const PERSIST_ENTRY_TYPE = "plan-workflow";

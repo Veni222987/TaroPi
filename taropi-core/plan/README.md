@@ -4,8 +4,8 @@
 
 1. **计划制定阶段**
    - 当前主 agent 临时切到 `Aurum`。
-   - 禁用 `edit`/`write`，保留读代码能力，并启用 `subagent`。
-   - planner 可以并行派发多个 `scout` agent，从不同模块/方案角度调研，最后输出 `Plan:` 编号步骤。
+   - 禁用 `edit`/`write`，保留读代码能力（`read`/`bash`/`grep`/`find`/`ls`）。
+   - planner 一个 agent 独立完成调研到出计划的全流程，不派发 subagent，最后输出 `Plan:` 编号步骤。
    - 步骤会按模块隔离性和任务复杂度拆分，方便后续并行实施；强依赖步骤应合并。
 
 2. **澄清阶段**
