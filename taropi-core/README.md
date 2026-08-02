@@ -6,7 +6,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 
 | 能力 | 说明 |
 |------|------|
-| 🎭 人物设定 | 追加 system prompt：中文回答、处事风格 |
+| 📝 追加系统提示词 | `plain/APPEND_SYSTEM.md`：中文表达、工作方式与工具调用规则；按 `recommend/README.md` 复制后由 Pi 追加到默认提示词 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
 | 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机（`plan/`）：Aurum 制定计划、选择框（开始实现/补充内容）循环澄清、确认后并行派发 Argentum developer；todo 独立为工具和命令 |
@@ -140,15 +140,15 @@ TaroPi 整合包，一个入口加载所有核心能力。
 ```
 taropi-core/
 ├── index.ts              # 入口：统一注册所有模块
-├── character/            # 人物设定：语言习惯 / 处事风格
 ├── sub-agents/           # subagent 工具（single / parallel / chain 派发）
 ├── plan/                 # /plan 三阶段状态机（计划制定 / 澄清 / 并行实施）
 ├── loop/                 # /loop crontab 驱动的定时循环（复用 agent 定义，独立进程/独立 session）
-├── todo/                # 独立 todo 工具、/todo 命令、HUD todo 面板
+├── todo/                 # 独立 todo 工具、/todo 命令、HUD todo 面板
 ├── additionally/         # /additionally 命令
 ├── permissions/          # 权限管控
 ├── hud/                  # 常驻 HUD 状态面板
-└── plain/                # 纯文本资源：agents / skills
+└── plain/                # 纯文本资源：APPEND_SYSTEM / agents / skills
+    ├── APPEND_SYSTEM.md  # 中文表达、工作方式与工具调用规则；按 recommend 复制到 ~/.pi/agent/ 后由 Pi 加载
     ├── agents/           # subagent 定义（scout / planner / developer / reviewer），会话启动时自动同步到 ~/.pi/agent/agents/
     └── skills/           # 可发现的 skill（SKILL.md）
 ```

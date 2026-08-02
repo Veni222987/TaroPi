@@ -37,7 +37,7 @@ pi 会自动 clone 仓库并运行 `npm install`，`pi-web-access`、`ask_user_q
 
 | 包 | 说明 |
 |----|------|
-| `taropi-core` | 核心整合包：subagent 工具、权限管控、中文回答、网络访问、向用户提问等 |
+| `taropi-core` | 核心整合包：subagent 工具、权限管控、网络访问、向用户提问等；中文表达规则按推荐的 `APPEND_SYSTEM.md` 配置启用 |
 | `taropi-draw` | AI 生图：根据手绘草图或描述生成专业架构图 (PNG) |
 
 <!-- test-passed: 2026 -->

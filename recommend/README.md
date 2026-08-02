@@ -4,10 +4,23 @@
 
 | 文件 | 复制到 | 说明 |
 |------|--------|------|
-| `AGENTS.md` | 项目根目录 `<project>/AGENTS.md`，或全局 `~/.pi/AGENTS.md` | 中文回答 + 工作原则；项目级仅对当前项目生效，全局级对所有项目生效 |
+| `taropi-core/plain/APPEND_SYSTEM.md` | `~/.pi/agent/APPEND_SYSTEM.md` | 追加中文表达、工作方式和工具调用规则，同时保留 Pi 默认的工具、skills 与项目上下文注入 |
 | `permissions.json` | `~/.pi/agent/permissions.json` | taropi-permissions 权限规则；插件启动时自动读取并与默认规则合并 |
 | `web-search.json` | `~/.pi/web-search.json` | pi-web-access 的 `web_search` 默认走纯 API 搜索（`workflow: "none"`），跳过浏览器 curator；规避该包 `openCuratorBrowser` 中 `sendCuratorFallbackUpdate` 作用域 bug 导致的崩溃（`try`/`catch` 跨块引用变量） |
 | `keybindings.json` | `~/.pi/agent/keybindings.json` | 将中断从 `Esc` 改为 `Ctrl+C`（更符合终端习惯），`Esc` 改为清空编辑器；复制后 `/reload` 生效 |
+
+## 追加系统提示词（APPEND_SYSTEM.md）
+
+`APPEND_SYSTEM.md` 是 Pi 的追加系统提示词机制：它在默认系统提示词后附加规则，不会像 `SYSTEM.md` 那样替换默认的工具摘要、工具 Guidelines、skills 和项目上下文。
+
+在仓库根目录执行：
+
+```bash
+mkdir -p ~/.pi/agent
+cp taropi-core/plain/APPEND_SYSTEM.md ~/.pi/agent/APPEND_SYSTEM.md
+```
+
+文件名必须保持全大写。复制后重启 Pi，或在 Pi 中执行 `/reload`。
 
 ## sub-agent 模型档位（Aurum / Argentum / Cuprum）
 

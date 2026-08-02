@@ -5,7 +5,6 @@ import { registerAdditionally } from "./additionally/index.js";
 import registerPlan from "./plan/index.js";
 import { registerLoop } from "./loop/index.js";
 import { registerTodo } from "./todo/index.js";
-import { registerCharacter } from "./character/index.js";
 import registerPermissions from "./permissions/index.js";
 import registerWebAccess from "pi-web-access/index.ts";
 import registerAskUserQuestion from "@juicesharp/rpiv-ask-user-question";
@@ -19,7 +18,6 @@ export default function (pi: ExtensionAPI) {
   registerTodo(pi);
   registerPlan(pi);
   registerLoop(pi);
-  registerCharacter(pi);
   registerPermissions(pi);
   registerWebAccess(pi);
   registerHud(pi);
