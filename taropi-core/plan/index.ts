@@ -1,25 +1,21 @@
 /**
  * /plan 三阶段状态机装配层
  *
- * State A: planning      - 主 agent 切换到 Aurum，独立完成调研并产出 Plan（不派发 subagent）。
- * State B: clarifying    - 计划生成后代码直接弹出选择框（开始实现/补充内容），不经过 LLM，用户选择后同步触发状态流转。
- * State C: implementing  - 按步骤并行派发 developer agent，todo 跟踪进度。
+ * State A: planning      - 主 agent 切换到 Aurum，独立完成调研并产出 Plan。
+ * State B: clarifying    - 计划生成后代码直接弹出选择框（开始实施/补充内容），用户选择后同步触发状态流转。
+ * State C: implementing  - 恢复主 agent 的模型和读写工具，直接执行已确认计划。
  *
  * 运行时 key（勿改，保证旧会话兼容）：
  * - PERSIST_ENTRY_TYPE = "plan-workflow"
  * - HUD key = "plan-workflow"
- * - customType = "plan-workflow-context"（当前）／ "plan-with-todo-context"（旧版，仅过滤用）
+ * - customType = "plan-workflow-context"
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getFinalOutput, mapWithConcurrencyLimit, MAX_CONCURRENCY, runSingleAgent } from "../sub-agents/engine.ts";
-import type { SingleResult, SubagentDetails } from "../sub-agents/types.ts";
-import { discoverAgents } from "../sub-agents/agents.ts";
 import { registerHudPanel, requestHudRefresh } from "../hud/registry.ts";
 import type { HudTheme } from "../hud/theme.ts";
-import { getTodoController, type TodoController } from "../todo/index.ts";
 import { resolveModelAlias } from "../model-alias/store.ts";
 import {
 	extractPlanSection,
@@ -35,7 +31,8 @@ import { askPlanDecision } from "./ask-user-question.ts";
 
 const PLANNER_MODEL_NAME = "Aurum";
 const PLANNING_EXTRA_TOOLS = ["read", "bash", "grep", "find", "ls"];
-const PLANNING_DISABLED_TOOLS = new Set(["edit", "write"]);
+const PLANNING_DISABLED_TOOLS = new Set(["edit", "write", "subagent"]);
+const IMPLEMENTING_DISABLED_TOOLS = new Set(["subagent"]);
 /** 持久化 entry type，勿改，保证旧会话兼容 */
 const PERSIST_ENTRY_TYPE = "plan-workflow";
 
@@ -80,6 +77,11 @@ function getTextContent(message: AssistantMessage): string {
 function planMessageFor(task: string, feedback?: string): string {
 	if (!feedback) return `进入计划制定阶段。用户任务：\n${task}`;
 	return `用户对上一版计划提出了补充/调整意见，请回到计划制定阶段，结合原任务重新出一版计划。\n\n原任务：\n${task}\n\n用户反馈：\n${feedback}`;
+}
+
+// implementationMessageFor 将已确认计划交给主 agent 直接实施
+function implementationMessageFor(task: string, planText: string): string {
+	return `计划已获用户确认，现进入实施阶段。请使用当前主 agent 的完整读写工具，直接在当前工作目录执行下面的已确认计划。\n\n执行要求：\n- 按计划顺序修改代码；根据实际依赖调整顺序时要说明原因。\n- 完成后运行必要的测试、构建或校验，并在最终回复中汇报变更、验证结果和遗留风险。\n\n原始任务：\n${task}\n\n已确认计划：\n${planText}`;
 }
 
 // --- 阶段提示词 ----------------------------------------------------------
@@ -165,6 +167,13 @@ function createRuntime(pi: ExtensionAPI) {
 		pi.setActiveTools(nextTools);
 	}
 
+	// enterImplementationRuntime 恢复主 agent 的模型和完整读写工具
+	async function enterImplementationRuntime(): Promise<void> {
+		if (savedModel) await pi.setModel(savedModel);
+		const baseTools = savedTools ?? pi.getActiveTools();
+		pi.setActiveTools(baseTools.filter((tool) => !IMPLEMENTING_DISABLED_TOOLS.has(tool)));
+	}
+
 	// restoreRuntime 恢复到进入 planner 前的模型和工具集
 	async function restoreRuntime(): Promise<void> {
 		if (savedModel) await pi.setModel(savedModel);
@@ -173,7 +182,7 @@ function createRuntime(pi: ExtensionAPI) {
 		savedTools = undefined;
 	}
 
-	return { enterPlannerRuntime, restoreRuntime };
+	return { enterPlannerRuntime, enterImplementationRuntime, restoreRuntime };
 }
 
 // --- 持久化 --------------------------------------------------------------
@@ -208,54 +217,6 @@ function restoreState(ctx: ExtensionContext): WorkflowState | undefined {
 	};
 }
 
-// --- developer 派发与实施 -------------------------------------------------
-
-// dispatchDeveloperAgents 并行派发 developer agent 执行各步骤，返回汇总报告
-async function dispatchDeveloperAgents(
-	cwd: string,
-	steps: string[],
-	planText: string,
-	todo: TodoController,
-): Promise<string> {
-	const discovery = discoverAgents(cwd, "both");
-	const developer = discovery.agents.find((a) => a.name === "developer");
-	if (!developer) return "**Plan execution failed:** 未找到 name: developer 的 agent。";
-
-	const makeDetails = (results: SingleResult[]): SubagentDetails => ({
-		mode: "parallel",
-		agentScope: "both",
-		projectAgentsDir: discovery.projectAgentsDir,
-		results,
-	});
-
-	const results = await mapWithConcurrencyLimit(steps, MAX_CONCURRENCY, async (stepText, index) => {
-		const step = index + 1;
-		const result = await runSingleAgent(
-			cwd,
-			discovery.agents,
-			developer.name,
-			`你负责并行实施计划中的第 ${step} 步。\n\n完整计划：\n${planText}\n\n本步骤：\n${step}. ${stepText}\n\n只做本步骤，避免和其它 developer 的步骤抢改同一块逻辑；如果发现强依赖或冲突，请在输出中说明。`,
-			cwd,
-			step,
-			undefined,
-			undefined,
-			makeDetails,
-		);
-		if (result.exitCode === 0) todo.complete(step);
-		return result;
-	});
-
-	const succeeded = results.filter((r) => r.exitCode === 0).length;
-	const summary = results
-		.map((r) => {
-			const output = getFinalOutput(r.messages) || r.stderr || "(no output)";
-			const icon = r.exitCode === 0 ? "✓" : "✗";
-			return `### Step ${r.step}: ${icon} ${r.agent}\n\n${output}`;
-		})
-		.join("\n\n---\n\n");
-	return `**Plan Complete!** (${succeeded}/${results.length} developer agents succeeded)\n\n${summary}`;
-}
-
 // --- HUD -----------------------------------------------------------------
 
 // registerPlanHud 注册 plan workflow 的 HUD panel，state 以 getter 形式传入避免闭包过早捕获
@@ -266,7 +227,7 @@ function registerPlanHud(getState: () => WorkflowState): void {
 			const state = getState();
 			if (state.phase === "idle") return [];
 			const label =
-				state.phase === "planning" ? "计划制定" : state.phase === "clarifying" ? "澄清确认" : "并行实施";
+				state.phase === "planning" ? "计划制定" : state.phase === "clarifying" ? "澄清确认" : "直接实施";
 			return [
 				`${theme.c("🧭", theme.YELLOW)} ${theme.c("plan", theme.YELLOW)} ${theme.c(label, theme.FG)} ${theme.dim(`调整 ${state.adjustmentRounds} 轮`)}`,
 			];
@@ -278,8 +239,9 @@ function registerPlanHud(getState: () => WorkflowState): void {
 
 // registerPlan 注册 /plan 三阶段状态机
 export default function registerPlan(pi: ExtensionAPI): void {
-  const todo = getTodoController();
 	let state: WorkflowState = { phase: "idle", task: "", planText: "", adjustmentRounds: 0 };
+	let implementationCompletionTimer: ReturnType<typeof setTimeout> | undefined;
+	let implementationCompletionGeneration = 0;
 	const runtime = createRuntime(pi);
 
 	function refresh(): void {
@@ -304,49 +266,71 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		persistState(pi, state);
 	}
 
+	function cancelImplementationCompletion(): void {
+		implementationCompletionGeneration++;
+		if (implementationCompletionTimer) clearTimeout(implementationCompletionTimer);
+		implementationCompletionTimer = undefined;
+	}
+
+	function scheduleImplementationCompletion(ctx: ExtensionContext): void {
+		cancelImplementationCompletion();
+		const generation = implementationCompletionGeneration;
+		const check = (): void => {
+			if (generation !== implementationCompletionGeneration || state.phase !== "implementing") return;
+			// 等待 agent_end 后续的自动重试与 queued follow-up 排空后收口。
+			if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+				implementationCompletionTimer = setTimeout(check, 10);
+				return;
+			}
+			void finishImplementation();
+		};
+		implementationCompletionTimer = setTimeout(check, 0);
+	}
+
 	function resetState(): void {
+		cancelImplementationCompletion();
 		state = { phase: "idle", task: "", planText: "", adjustmentRounds: 0 };
-		todo.clear();
 		refresh();
 		persistState(pi, state);
 	}
 
-	// startImplementation 进入实施阶段：解析步骤、替换 todo、派发 developer agent
-	async function startImplementation(ctx: ExtensionContext, steps: string[]): Promise<void> {
+	// startImplementation 切回主 agent，按确认计划直接实施
+	async function startImplementation(): Promise<void> {
+		cancelImplementationCompletion();
 		setPhase("implementing");
 		syncPlanMarkdown("implementing");
-		todo.replace(steps, state.planMdPath);
-		await runtime.restoreRuntime();
+		await runtime.enterImplementationRuntime();
 
 		pi.sendMessage(
 			{
 				customType: "plan-implementation-start",
-				content: `进入实施阶段：已根据模块隔离性拆出 ${steps.length} 个 todo，并行派发给 developer agent。\n\n${todo.renderPlain()}`,
+				content: "计划已确认，进入主 Agent 实施阶段。",
 				display: true,
 			},
 			{ triggerTurn: false },
 		);
+		pi.sendUserMessage(implementationMessageFor(state.task, state.planText), { deliverAs: "followUp" });
+	}
 
-		dispatchDeveloperAgents(ctx.cwd, steps, state.planText, todo)
-			.then((summary) => {
-				syncPlanMarkdown("completed");
-				pi.sendMessage({ customType: "plan-complete", content: summary, display: true }, { triggerTurn: false });
-			})
-			.catch((err: Error) => {
-				pi.sendMessage(
-					{ customType: "plan-error", content: `**Plan execution failed:** ${err.message}`, display: true },
-					{ triggerTurn: false },
-				);
-			})
-			.finally(() => {
-				resetState();
-			});
+	// finishImplementation 标记计划完成并恢复用户原有模型、工具集
+	async function finishImplementation(): Promise<void> {
+		syncPlanMarkdown("completed");
+		await runtime.restoreRuntime();
+		pi.sendMessage(
+			{
+				customType: "plan-completed",
+				content: "计划实施完成，已恢复原模型与工具集。",
+				display: true,
+			},
+			{ triggerTurn: false },
+		);
+		resetState();
 	}
 
 	registerPlanHud(() => state);
 
 	pi.registerCommand("plan", {
-		description: "启动状态机式计划流程：制定计划 → 澄清确认 → 并行实施",
+		description: "启动三阶段计划流程：制定计划 → 澄清确认 → 主 Agent 实施",
 		handler: async (args, ctx) => {
 			const task = args.trim();
 			if (!task) {
@@ -378,7 +362,7 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		return {
 			messages: event.messages.filter((m) => {
 				const msg = m as AgentMessage & { customType?: string };
-				return msg.customType !== "plan-workflow-context" && msg.customType !== "plan-with-todo-context";
+				return msg.customType !== "plan-workflow-context";
 			}),
 		};
 	});
@@ -415,8 +399,13 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		}
 	});
 
-	// planning 阶段拦截 bash 的写入类命令（只读命令放行）
+	// planning 阶段控制 bash 写入限制
 	pi.on("tool_call", async (event, ctx) => {
+		if (state.phase === "planning" || state.phase === "implementing") {
+			if (event.toolName === "subagent") {
+				return { block: true, reason: "当前计划由主 Agent 执行。" };
+			}
+		}
 		if (state.phase !== "planning") return;
 		if (event.toolName !== "bash") return;
 		const command: string = (event.input as { command?: string })?.command ?? "";
@@ -427,7 +416,15 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		}
 	});
 
+	pi.on("agent_start", async () => {
+		if (state.phase === "implementing") cancelImplementationCompletion();
+	});
+
 	pi.on("agent_end", async (event, ctx) => {
+		if (state.phase === "implementing") {
+			scheduleImplementationCompletion(ctx);
+			return;
+		}
 		if (state.phase !== "planning") return;
 		const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
 		if (!lastAssistant) return;
@@ -442,17 +439,15 @@ export default function registerPlan(pi: ExtensionAPI): void {
 			state.planMdPath = written.filePath;
 			state.planCreatedAt = written.createdAt;
 		}
-		pi.sendMessage(
-			{ customType: "plan-draft", content: `计划已生成：${state.planMdPath}`, display: true },
-			{ triggerTurn: false },
-		);
+		const planMdPath = state.planMdPath;
+		if (!planMdPath) return;
 		setPhase("clarifying");
 		syncPlanMarkdown("clarifying");
 
-		// 直接弹选择框（开始实现/补充内容），不经过 LLM，用户选完立即同步触发状态流转
-		const decision = await askPlanDecision(ctx);
+		// 选择框直接显示计划文件位置，避免计划提示被 overlay 遮住后延迟出现。
+		const decision = await askPlanDecision(ctx, planMdPath);
 		if (decision.execute) {
-			await startImplementation(ctx, steps);
+			await startImplementation();
 			return;
 		}
 

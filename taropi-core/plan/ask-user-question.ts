@@ -31,12 +31,12 @@ interface Row {
 }
 
 const ROWS: Row[] = [
-	{ label: EXECUTE_PLAN_LABEL, description: "直接进入实施阶段，按步骤并行派发 developer agent" },
+	{ label: EXECUTE_PLAN_LABEL, description: "进入主 Agent 实施阶段" },
 	{ label: ADJUST_PLAN_LABEL, description: "移到此行直接输入调整意见，回车提交（可留空）" },
 ];
 
 /**
- * 计划澄清选择框：两行——「开始实现」直接确认，「补充内容」落焦即可输入。
+ * 计划澄清选择框：两行——「开始实施」直接进入执行，「补充内容」落焦即可输入。
  * ↑↓ 切换焦点，Enter 确认当前行，Esc 视为不实施且不带反馈。
  */
 export class PlanDecisionPage {
@@ -46,6 +46,7 @@ export class PlanDecisionPage {
 	constructor(
 		private theme: Theme,
 		private onDecide: (decision: PlanDecision) => void,
+		private planMdPath: string,
 	) {}
 
 	handleInput(data: string): void {
@@ -78,6 +79,7 @@ export class PlanDecisionPage {
 	render(_width: number): string[] {
 		const lines: string[] = [];
 		lines.push(this.theme.bold("计划已生成，如何继续？"));
+		lines.push(this.theme.fg("dim", `计划文件：${this.planMdPath}`));
 		lines.push("");
 
 		for (let i = 0; i < ROWS.length; i++) {
@@ -105,10 +107,10 @@ export class PlanDecisionPage {
 	invalidate(): void {}
 }
 
-// askPlanDecision 弹出选择框询问用户对当前计划的决定
-export async function askPlanDecision(ctx: ExtensionContext): Promise<PlanDecision> {
+// askPlanDecision 显示计划文件位置并弹出选择框询问用户对当前计划的决定
+export async function askPlanDecision(ctx: ExtensionContext, planMdPath: string): Promise<PlanDecision> {
 	return ctx.ui.custom<PlanDecision>(
-		(_tui, theme, _keybindings, done) => new PlanDecisionPage(theme, (decision) => done(decision)),
+		(_tui, theme, _keybindings, done) => new PlanDecisionPage(theme, (decision) => done(decision), planMdPath),
 		{
 			overlay: true,
 			overlayOptions: { anchor: "bottom-center", width: "100%", margin: { left: 0, right: 0, bottom: 0 } },

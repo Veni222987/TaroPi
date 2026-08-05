@@ -5,7 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export const EXECUTE_PLAN_LABEL = "开始实现";
+export const EXECUTE_PLAN_LABEL = "开始实施";
 export const ADJUST_PLAN_LABEL = "补充内容";
 
 export type PlanStatus = "planning" | "clarifying" | "implementing" | "completed";
@@ -13,7 +13,7 @@ export type PlanStatus = "planning" | "clarifying" | "implementing" | "completed
 const STATUS_LABEL: Record<PlanStatus, string> = {
   planning: "🧭 计划制定中",
   clarifying: "❔ 澄清确认中",
-  implementing: "▶ 实施中",
+  implementing: "▶ 主 Agent 实施中",
   completed: "✓ 已完成",
 };
 
@@ -21,7 +21,7 @@ function fmtTimestamp(d: Date): string {
   return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
-// cleanStepText 清理计划步骤文本，便于生成简短 todo
+// cleanStepText 清理计划步骤文本，便于展示步骤摘要
 export function cleanStepText(text: string): string {
   let cleaned = text
     .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
