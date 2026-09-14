@@ -16,7 +16,8 @@ import {
   FG, COMMENT, PINK, GREEN, ORANGE, CYAN, PURPLE, YELLOW, BLUE,
   R, D, SEP, DIVIDER, hudTheme,
 } from "./theme.ts";
-import { getHudPanels, setHudRefreshCallback } from "./registry.ts";
+import type { HudTheme } from "./theme.ts";
+import { getHudPanels, registerHudPanel, requestHudRefresh, setHudRefreshCallback } from "./registry.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -457,6 +458,15 @@ function refreshHud(ctx?: any) {
 // ═══════════════════════════════════════════════════════════════
 
 export function registerHud(pi: ExtensionAPI) {
+  pi.events.on("taropi:hud:register", (provider: unknown) => {
+    if (!provider || typeof provider !== "object") return;
+    const panel = provider as { key?: unknown; render?: unknown };
+    if (typeof panel.key !== "string" || typeof panel.render !== "function") return;
+    registerHudPanel({ key: panel.key, render: panel.render as (theme: HudTheme) => string[] });
+    requestHudRefresh();
+  });
+  pi.events.on("taropi:hud:refresh", () => requestHudRefresh());
+
   // 注册刷新回调，供其他插件通过 requestHudRefresh() 触发重渲染
   setHudRefreshCallback(() => refreshHud());
 
