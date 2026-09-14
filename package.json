@@ -24,6 +24,10 @@
       "./taropi-core/plain/skills"
     ]
   },
+  "dependencies": {
+    "@juicesharp/rpiv-ask-user-question": "^1.20.0",
+    "pi-web-access": "github:nicobailon/pi-web-access"
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10",
     "typebox": "1.1.38",
