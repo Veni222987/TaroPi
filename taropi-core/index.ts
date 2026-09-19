@@ -15,7 +15,7 @@ export default function (pi: ExtensionAPI) {
   // 兼容热重载前注册的旧 todo HUD provider；当前版本不再提供 todo 功能。
   unregisterHudPanel("todo");
 
-  registerSubAgents(pi);
+  // registerSubAgents(pi);
   registerAdditionally(pi);
   registerAskUserQuestion(pi);
   registerPlan(pi);

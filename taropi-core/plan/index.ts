@@ -1,46 +1,30 @@
-/**
- * /plan 三阶段状态机装配层
- *
- * State A: planning      - 主 agent 切换到 Aurum，独立完成调研并产出 Plan。
- * State B: clarifying    - 计划生成后代码直接弹出选择框（开始实施/补充内容），用户选择后同步触发状态流转。
- * State C: implementing  - 恢复主 agent 的模型和读写工具，直接执行已确认计划。
- *
- * 运行时 key（勿改，保证旧会话兼容）：
- * - PERSIST_ENTRY_TYPE = "plan-workflow"
- * - HUD key = "plan-workflow"
- * - customType = "plan-workflow-context"
- */
-
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Model, TextContent } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerHudPanel, requestHudRefresh } from "../hud/registry.ts";
 import type { HudTheme } from "../hud/theme.ts";
 import { resolveModelAlias } from "../model-alias/store.ts";
-import {
-	extractPlanSection,
-	extractPlanSteps,
-	type PlanStatus,
-	updatePlanMarkdown,
-	writePlanMarkdown,
-} from "./utils.ts";
 import { plannerPrompt } from "./prompts.ts";
-import { askPlanDecision } from "./ask-user-question.ts";
-
-// --- 常量 ----------------------------------------------------------------
+import { showPlanDecision, updatePlanFile, type PlanFile } from "./tui.ts";
 
 const PLANNER_MODEL_NAME = "Aurum";
-const PLANNING_EXTRA_TOOLS = ["read", "bash", "grep", "find", "ls"];
-const PLANNING_DISABLED_TOOLS = new Set(["edit", "write", "subagent"]);
-const IMPLEMENTING_DISABLED_TOOLS = new Set(["subagent"]);
-/** 持久化 entry type，勿改，保证旧会话兼容 */
 const PERSIST_ENTRY_TYPE = "plan-workflow";
-
-// --- 类型 ----------------------------------------------------------------
+const CONTEXT_TYPE = "plan-workflow-context";
+const PLANNING_TOOLS = ["read", "bash", "grep", "find", "ls"];
+const DISABLED_PLAN_TOOLS = new Set(["edit", "write", "subagent"]);
+const SUBAGENT_TOOL = "subagent";
 
 type WorkflowPhase = "idle" | "planning" | "clarifying" | "implementing";
 
-interface WorkflowPersistedState {
+interface WorkflowState {
+	phase: WorkflowPhase;
+	task: string;
+	planText: string;
+	planFile?: PlanFile;
+	adjustmentRounds: number;
+}
+
+interface PersistedState {
 	phase?: WorkflowPhase;
 	task?: string;
 	planText?: string;
@@ -49,288 +33,196 @@ interface WorkflowPersistedState {
 	adjustmentRounds?: number;
 }
 
-interface WorkflowState {
-	phase: WorkflowPhase;
-	task: string;
-	planText: string;
-	planMdPath?: string;
-	planCreatedAt?: Date;
-	adjustmentRounds: number;
+function emptyState(): WorkflowState {
+	return { phase: "idle", task: "", planText: "", adjustmentRounds: 0 };
 }
 
-// --- 消息工具 ------------------------------------------------------------
-
-// isAssistantMessage 判断消息是否为 AssistantMessage
-function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
-	return m.role === "assistant" && Array.isArray(m.content);
+function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
+	return message.role === "assistant" && Array.isArray(message.content);
 }
 
-// getTextContent 提取 AssistantMessage 中的文本内容
-function getTextContent(message: AssistantMessage): string {
+function messageText(message: AssistantMessage): string {
 	return message.content
-		.filter((block): block is TextContent => block.type === "text")
-		.map((block) => block.text)
+		.filter((content): content is TextContent => content.type === "text")
+		.map((content) => content.text)
 		.join("\n");
 }
 
-// planMessageFor 构造计划阶段的用户消息
-function planMessageFor(task: string, feedback?: string): string {
+function extractPlan(message: string): string | undefined {
+	const match = message.match(/\*{0,2}Plan:\*{0,2}\s*\n/i);
+	if (!match || match.index === undefined) return undefined;
+	const plan = message.slice(match.index + match[0].length).trim();
+	return /^\s*\d+[.)]\s+.+/m.test(plan) ? plan : undefined;
+}
+
+function planningMessage(task: string, feedback?: string): string {
 	if (!feedback) return `进入计划制定阶段。用户任务：\n${task}`;
-	return `用户对上一版计划提出了补充/调整意见，请回到计划制定阶段，结合原任务重新出一版计划。\n\n原任务：\n${task}\n\n用户反馈：\n${feedback}`;
+	return `请根据用户补充继续澄清并更新计划。\n\n原始任务：\n${task}\n\n用户补充：\n${feedback}`;
 }
 
-// implementationMessageFor 将已确认计划交给主 agent 直接实施
-function implementationMessageFor(task: string, planText: string): string {
-	return `计划已获用户确认，现进入实施阶段。请使用当前主 agent 的完整读写工具，直接在当前工作目录执行下面的已确认计划。\n\n执行要求：\n- 按计划顺序修改代码；根据实际依赖调整顺序时要说明原因。\n- 完成后运行必要的测试、构建或校验，并在最终回复中汇报变更、验证结果和遗留风险。\n\n原始任务：\n${task}\n\n已确认计划：\n${planText}`;
+function implementationMessage(task: string, plan: string): string {
+	return `计划已获用户确认，进入实施阶段。请在当前工作目录直接执行下列计划。\n\n执行要求：\n- 按计划修改代码；实际依赖需要调整顺序时说明原因。\n- 完成后运行必要的测试、构建或校验，并汇报变更、验证结果和遗留风险。\n\n原始任务：\n${task}\n\n已确认计划：\n${plan}`;
 }
 
-// --- 阶段提示词 ----------------------------------------------------------
-
-function workflowPrompt(state: WorkflowState): string | undefined {
-	if (state.phase === "planning") return plannerPrompt(PLANNER_MODEL_NAME);
-	return undefined;
-}
-
-// --- bash 写入类命令检测 -----------------------------------------------
-
-/** 常见的写入/修改操作模式 */
-const MUTATING_PATTERNS = [
-	/>/,                                 // 输出重定向（包括 cat/echo > file）
-	/>>/,                                // 追加重定向
-	/(?:^|[;&|])\s*tee\s/,              // tee 写文件
-	/(?:^|[;&|])\s*mkdir\s/,            // 创建目录
-	/(?:^|[;&|])\s*touch\s/,            // 创建文件
-	/(?:^|[;&|])\s*rm\s/,               // 删除
-	/(?:^|[;&|])\s*mv\s/,               // 移动
-	/(?:^|[;&|])\s*cp\s/,               // 复制
-	/(?:^|[;&|])\s*dd\s/,               // 原始写入
-	/(?:^|[;&|])\s*chmod\s/,            // 权限
-	/(?:^|[;&|])\s*chown\s/,            // 所有者
-	/(?:^|[;&|])\s*ln\s/,               // 链接
-	/\bsed\s+-i\b/,                      // sed -i 原地编辑
-	/(?:^|[;&|])\s*npm\s+(?:i|install|init)\b/,   // npm install
-	/(?:^|[;&|])\s*yarn\s+(?:add|init)\b/,        // yarn add
-	/(?:^|[;&|])\s*pnpm\s+(?:add|install)\b/,     // pnpm add
-	/(?:^|[;&|])\s*pip\d*\s+install\b/,          // pip install
-	/(?:^|[;&|])\s*git\s+(?:add|commit|stash\s+(?:push|pop|apply|drop|branch)|merge\s|rebase\s|cherry-pick|checkout|switch|branch\s+-[dD])\b/,
-];
-
-function isPlanningBashBlocked(command: string): string | null {
-	const trimmed = command.trim();
-	for (const re of MUTATING_PATTERNS) {
-		if (re.test(trimmed)) {
-			return "计划制定阶段禁止编辑/创建文件。只允许 ls/find/grep/cat/head/tail/git status 等只读操作。\n如果你需要读取分析代码，请使用 read/grep/find/ls 工具。";
+function findModel(ctx: ExtensionContext, name: string): Model<Api> | undefined {
+	const alias = resolveModelAlias(name);
+	if (alias) {
+		const separator = alias.indexOf("/");
+		if (separator > 0) {
+			const model = ctx.modelRegistry.find(alias.slice(0, separator), alias.slice(separator + 1));
+			if (model) return model;
 		}
 	}
-	return null;
-}
-// --- 模型查找工具 --------------------------------------------------------
-
-// findModelByName 按名称查找模型，优先通过 model-alias 档位名（Aurum/Au 等）解析
-function findModelByName(ctx: ExtensionContext, name: string): Model<any> | undefined {
-	const aliasTarget = resolveModelAlias(name);
-	if (aliasTarget) {
-		const slash = aliasTarget.indexOf("/");
-		if (slash > 0) {
-			const found = ctx.modelRegistry.find(aliasTarget.slice(0, slash), aliasTarget.slice(slash + 1));
-			if (found) return found;
-		}
-	}
-	// 未设置别名或解析失败时，回退按 Model.name 精确匹配
-	return ctx.modelRegistry.getAll().find((m) => m.name === name);
+	return ctx.modelRegistry.getAll().find((model) => model.name === name);
 }
 
-// --- planner runtime 切换 ------------------------------------------------
-
-// createRuntime 创建 planner runtime 切换实例，管理模型与工具集的保存/恢复
 function createRuntime(pi: ExtensionAPI) {
-	let savedModel: Model<any> | undefined;
-	let savedTools: string[] | undefined;
+	let originalModel: Model<Api> | undefined;
+	let originalTools: string[] | undefined;
 
-	// enterPlannerRuntime 切换到 planner 模型和工具集
-	async function enterPlannerRuntime(ctx: ExtensionContext): Promise<void> {
-		if (!savedTools) savedTools = pi.getActiveTools();
-		if (!savedModel) savedModel = ctx.model;
+	async function enterPlanning(ctx: ExtensionContext): Promise<void> {
+		originalModel ??= ctx.model;
+		originalTools ??= pi.getActiveTools();
 
-		const plannerModel = findModelByName(ctx, PLANNER_MODEL_NAME);
-		if (plannerModel) {
-			const ok = await pi.setModel(plannerModel);
-			if (!ok) ctx.ui.notify(`没有 ${PLANNER_MODEL_NAME} 的可用凭证，继续使用当前模型规划`, "warning");
+		const model = findModel(ctx, PLANNER_MODEL_NAME);
+		if (model) {
+			if (!(await pi.setModel(model))) ctx.ui.notify(`没有 ${PLANNER_MODEL_NAME} 的可用凭证，继续使用当前模型规划`, "warning");
 		} else {
 			ctx.ui.notify(`未找到模型 ${PLANNER_MODEL_NAME}，继续使用当前模型规划`, "warning");
 		}
 
-		const allToolNames = new Set(pi.getAllTools().map((t) => t.name));
-		const nextTools = [
-			...new Set([...(savedTools ?? []).filter((t) => !PLANNING_DISABLED_TOOLS.has(t)), ...PLANNING_EXTRA_TOOLS]),
-		].filter((t) => allToolNames.has(t));
-		pi.setActiveTools(nextTools);
+		const available = new Set(pi.getAllTools().map((tool) => tool.name));
+		pi.setActiveTools(
+			[...new Set([...(originalTools ?? []).filter((tool) => !DISABLED_PLAN_TOOLS.has(tool)), ...PLANNING_TOOLS])].filter((tool) => available.has(tool)),
+		);
 	}
 
-	// enterImplementationRuntime 恢复主 agent 的模型和完整读写工具
-	async function enterImplementationRuntime(): Promise<void> {
-		if (savedModel) await pi.setModel(savedModel);
-		const baseTools = savedTools ?? pi.getActiveTools();
-		pi.setActiveTools(baseTools.filter((tool) => !IMPLEMENTING_DISABLED_TOOLS.has(tool)));
+	async function enterImplementation(): Promise<void> {
+		if (originalModel) await pi.setModel(originalModel);
+		pi.setActiveTools((originalTools ?? pi.getActiveTools()).filter((tool) => tool !== SUBAGENT_TOOL));
 	}
 
-	// restoreRuntime 恢复到进入 planner 前的模型和工具集
-	async function restoreRuntime(): Promise<void> {
-		if (savedModel) await pi.setModel(savedModel);
-		if (savedTools) pi.setActiveTools(savedTools);
-		savedModel = undefined;
-		savedTools = undefined;
+	async function restore(): Promise<void> {
+		if (originalModel) await pi.setModel(originalModel);
+		if (originalTools) pi.setActiveTools(originalTools);
+		originalModel = undefined;
+		originalTools = undefined;
 	}
 
-	return { enterPlannerRuntime, enterImplementationRuntime, restoreRuntime };
+	return { enterPlanning, enterImplementation, restore };
 }
 
-// --- 持久化 --------------------------------------------------------------
-
-// persistState 将当前 WorkflowState 写入会话 entry
-function persistState(pi: ExtensionAPI, state: WorkflowState): void {
+function persist(pi: ExtensionAPI, state: WorkflowState): void {
 	pi.appendEntry(PERSIST_ENTRY_TYPE, {
 		phase: state.phase,
 		task: state.task,
 		planText: state.planText,
-		planMdPath: state.planMdPath,
-		planCreatedAt: state.planCreatedAt?.toISOString(),
+		planMdPath: state.planFile?.path,
+		planCreatedAt: state.planFile?.createdAt.toISOString(),
 		adjustmentRounds: state.adjustmentRounds,
-	} satisfies WorkflowPersistedState);
+	} satisfies PersistedState);
 }
 
-// restoreState 从会话 entry 恢复 WorkflowState（idle 阶段），无历史时返回 undefined
 function restoreState(ctx: ExtensionContext): WorkflowState | undefined {
 	const entry = ctx.sessionManager
 		.getEntries()
-		.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === PERSIST_ENTRY_TYPE)
-		.pop() as { data?: WorkflowPersistedState } | undefined;
-
+		.filter((item: { type: string; customType?: string }) => item.type === "custom" && item.customType === PERSIST_ENTRY_TYPE)
+		.pop() as { data?: PersistedState } | undefined;
 	if (!entry?.data) return undefined;
+
+	const { data } = entry;
 	return {
 		phase: "idle",
-		task: entry.data.task ?? "",
-		planText: entry.data.planText ?? "",
-		planMdPath: entry.data.planMdPath,
-		planCreatedAt: entry.data.planCreatedAt ? new Date(entry.data.planCreatedAt) : undefined,
-		adjustmentRounds: entry.data.adjustmentRounds ?? 0,
+		task: data.task ?? "",
+		planText: data.planText ?? "",
+		planFile: data.planMdPath && data.planCreatedAt ? { path: data.planMdPath, createdAt: new Date(data.planCreatedAt) } : undefined,
+		adjustmentRounds: data.adjustmentRounds ?? 0,
 	};
 }
 
-// --- HUD -----------------------------------------------------------------
-
-// registerPlanHud 注册 plan workflow 的 HUD panel，state 以 getter 形式传入避免闭包过早捕获
 function registerPlanHud(getState: () => WorkflowState): void {
 	registerHudPanel({
-		key: "plan-workflow",
+		key: PERSIST_ENTRY_TYPE,
 		render(theme: HudTheme): string[] {
 			const state = getState();
 			if (state.phase === "idle") return [];
-			const label =
-				state.phase === "planning" ? "计划制定" : state.phase === "clarifying" ? "澄清确认" : "直接实施";
-			return [
-				`${theme.c("🧭", theme.YELLOW)} ${theme.c("plan", theme.YELLOW)} ${theme.c(label, theme.FG)} ${theme.dim(`调整 ${state.adjustmentRounds} 轮`)}`,
-			];
+			const phase = state.phase === "planning" ? "计划制定" : state.phase === "clarifying" ? "澄清确认" : "直接实施";
+			return [`${theme.c("🧭", theme.YELLOW)} ${theme.c("plan", theme.YELLOW)} ${theme.c(phase, theme.FG)} ${theme.dim(`调整 ${state.adjustmentRounds} 轮`)}`];
 		},
 	});
 }
 
-// --- 装配 ----------------------------------------------------------------
+function isMutatingCommand(command: string): boolean {
+	return [
+		/>/, />>/, /(?:^|[;&|])\s*(?:tee|mkdir|touch|rm|mv|cp|dd|chmod|chown|ln)\s/,
+		/\bsed\s+-i\b/, /(?:^|[;&|])\s*(?:npm\s+(?:i|install|init)|yarn\s+(?:add|init)|pnpm\s+(?:add|install)|pip\d*\s+install)\b/,
+		/(?:^|[;&|])\s*git\s+(?:add|commit|stash\s+(?:push|pop|apply|drop|branch)|merge\s|rebase\s|cherry-pick|checkout|switch|branch\s+-[dD])\b/,
+	].some((pattern) => pattern.test(command.trim()));
+}
 
-// registerPlan 注册 /plan 三阶段状态机
+// registerPlan 注册 /plan 三阶段状态机。
 export default function registerPlan(pi: ExtensionAPI): void {
-	let state: WorkflowState = { phase: "idle", task: "", planText: "", adjustmentRounds: 0 };
-	let implementationCompletionTimer: ReturnType<typeof setTimeout> | undefined;
-	let implementationCompletionGeneration = 0;
+	let state = emptyState();
+	let completionTimer: ReturnType<typeof setTimeout> | undefined;
+	let completionGeneration = 0;
 	const runtime = createRuntime(pi);
 
-	function refresh(): void {
+	function save(): void {
 		requestHudRefresh();
-	}
-
-	function planStatusForPhase(phase: WorkflowPhase): PlanStatus {
-		if (phase === "planning") return "planning";
-		if (phase === "clarifying") return "clarifying";
-		if (phase === "implementing") return "implementing";
-		return "completed";
-	}
-
-	function syncPlanMarkdown(status = planStatusForPhase(state.phase)): void {
-		if (!state.planMdPath || !state.planCreatedAt || !state.planText) return;
-		updatePlanMarkdown(state.planMdPath, state.planText, state.planCreatedAt, status);
+		persist(pi, state);
 	}
 
 	function setPhase(phase: WorkflowPhase): void {
 		state.phase = phase;
-		refresh();
-		persistState(pi, state);
+		save();
 	}
 
-	function cancelImplementationCompletion(): void {
-		implementationCompletionGeneration++;
-		if (implementationCompletionTimer) clearTimeout(implementationCompletionTimer);
-		implementationCompletionTimer = undefined;
+	function cancelCompletion(): void {
+		completionGeneration++;
+		if (completionTimer) clearTimeout(completionTimer);
+		completionTimer = undefined;
 	}
 
-	function scheduleImplementationCompletion(ctx: ExtensionContext): void {
-		cancelImplementationCompletion();
-		const generation = implementationCompletionGeneration;
+	function reset(): void {
+		cancelCompletion();
+		state = emptyState();
+		save();
+	}
+
+	async function finishImplementation(): Promise<void> {
+		updatePlanFile(state.planFile, state.planText, "completed");
+		await runtime.restore();
+		pi.sendMessage({ customType: "plan-completed", content: "计划实施完成，已恢复原模型与工具集。", display: true }, { triggerTurn: false });
+		reset();
+	}
+
+	function scheduleCompletion(ctx: ExtensionContext): void {
+		cancelCompletion();
+		const generation = completionGeneration;
 		const check = (): void => {
-			if (generation !== implementationCompletionGeneration || state.phase !== "implementing") return;
-			// 等待 agent_end 后续的自动重试与 queued follow-up 排空后收口。
+			if (generation !== completionGeneration || state.phase !== "implementing") return;
 			if (!ctx.isIdle() || ctx.hasPendingMessages()) {
-				implementationCompletionTimer = setTimeout(check, 10);
+				completionTimer = setTimeout(check, 10);
 				return;
 			}
 			void finishImplementation();
 		};
-		implementationCompletionTimer = setTimeout(check, 0);
+		completionTimer = setTimeout(check, 0);
 	}
 
-	function resetState(): void {
-		cancelImplementationCompletion();
-		state = { phase: "idle", task: "", planText: "", adjustmentRounds: 0 };
-		refresh();
-		persistState(pi, state);
-	}
-
-	// startImplementation 切回主 agent，按确认计划直接实施
 	async function startImplementation(): Promise<void> {
-		cancelImplementationCompletion();
+		cancelCompletion();
 		setPhase("implementing");
-		syncPlanMarkdown("implementing");
-		await runtime.enterImplementationRuntime();
-
-		pi.sendMessage(
-			{
-				customType: "plan-implementation-start",
-				content: "计划已确认，进入主 Agent 实施阶段。",
-				display: true,
-			},
-			{ triggerTurn: false },
-		);
-		pi.sendUserMessage(implementationMessageFor(state.task, state.planText), { deliverAs: "followUp" });
-	}
-
-	// finishImplementation 标记计划完成并恢复用户原有模型、工具集
-	async function finishImplementation(): Promise<void> {
-		syncPlanMarkdown("completed");
-		await runtime.restoreRuntime();
-		pi.sendMessage(
-			{
-				customType: "plan-completed",
-				content: "计划实施完成，已恢复原模型与工具集。",
-				display: true,
-			},
-			{ triggerTurn: false },
-		);
-		resetState();
+		updatePlanFile(state.planFile, state.planText, "implementing");
+		await runtime.enterImplementation();
+		pi.sendMessage({ customType: "plan-implementation-start", content: "计划已确认，进入主 Agent 实施阶段。", display: true }, { triggerTurn: false });
+		pi.sendUserMessage(implementationMessage(state.task, state.planText), { deliverAs: "followUp" });
 	}
 
 	registerPlanHud(() => state);
 
 	pi.registerCommand("plan", {
-		description: "启动三阶段计划流程：制定计划 → 澄清确认 → 主 Agent 实施",
+		description: "启动计划流程：制定计划 → 澄清确认 → 主 Agent 实施",
 		handler: async (args, ctx) => {
 			const task = args.trim();
 			if (!task) {
@@ -341,131 +233,77 @@ export default function registerPlan(pi: ExtensionAPI): void {
 				ctx.ui.notify(`当前 /plan 仍在 ${state.phase} 阶段，请先完成或等待结束。`, "warning");
 				return;
 			}
-
-			await runtime.enterPlannerRuntime(ctx);
-			state = { phase: "planning", task, planText: "", adjustmentRounds: 0 };
-			refresh();
-			persistState(pi, state);
-			pi.sendUserMessage(planMessageFor(task), { deliverAs: "followUp" });
+			await runtime.enterPlanning(ctx);
+			state = { ...emptyState(), phase: "planning", task };
+			save();
+			pi.sendUserMessage(planningMessage(task), { deliverAs: "followUp" });
 		},
 	});
 
 	pi.on("before_agent_start", async () => {
-		const prompt = workflowPrompt(state);
-		if (!prompt) return;
-		return { message: { customType: "plan-workflow-context", content: prompt, display: false } };
+		if (state.phase !== "planning") return;
+		return { message: { customType: CONTEXT_TYPE, content: plannerPrompt(), display: false } };
 	});
 
 	pi.on("context", async (event) => {
-		// 退出 workflow 后过滤掉历史规划人格注入，避免污染普通对话
 		if (state.phase !== "idle") return;
-		return {
-			messages: event.messages.filter((m) => {
-				const msg = m as AgentMessage & { customType?: string };
-				return msg.customType !== "plan-workflow-context";
-			}),
-		};
+		return { messages: event.messages.filter((message) => (message as AgentMessage & { customType?: string }).customType !== CONTEXT_TYPE) };
 	});
 
-	// planning / clarifying 阶段拦截 Ctrl+P 模型切换
-	// model_select source "cycle" 表示用户通过快捷键（Ctrl+P）手动切换模型
 	pi.on("model_select", async (event, ctx) => {
 		if (state.phase !== "planning" && state.phase !== "clarifying") return;
-		if (event.source !== "cycle") return; // 只拦截手动快捷键，放行程序化 set/restore
-
-		const plannerModel = findModelByName(ctx, PLANNER_MODEL_NAME);
-		if (!plannerModel) {
-			ctx.ui.notify("计划阶段请勿切换模型。未找到 Aurum 模型，无法自动恢复。", "warning");
+		if (event.source !== "cycle") return;
+		const model = findModel(ctx, PLANNER_MODEL_NAME);
+		if (!model || !(await pi.setModel(model))) {
+			ctx.ui.notify(`计划阶段请勿切换模型。${PLANNER_MODEL_NAME} 不可用，无法自动恢复。`, "warning");
 			return;
 		}
-
-		// 如果当前已经是 planner 模型（理论上不应被切走，但防抖）则静默忽略
-		if (ctx.model && ctx.model.provider === plannerModel.provider && ctx.model.id === plannerModel.id) {
-			return;
-		}
-
-		// 切回 planner 模型
-		const ok = await pi.setModel(plannerModel);
-		if (ok) {
-			ctx.ui.notify(
-				`计划制定阶段已锁定模型为 ${PLANNER_MODEL_NAME}，请完成计划后再切换。`,
-				"warning",
-			);
-		} else {
-			ctx.ui.notify(
-				`计划阶段请勿切换模型。${PLANNER_MODEL_NAME} 凭证不可用，无法自动恢复。`,
-				"error",
-			);
-		}
+		ctx.ui.notify(`计划制定阶段已锁定模型为 ${PLANNER_MODEL_NAME}，请完成计划后再切换。`, "warning");
 	});
 
-	// planning 阶段控制 bash 写入限制
 	pi.on("tool_call", async (event, ctx) => {
-		if (state.phase === "planning" || state.phase === "implementing") {
-			if (event.toolName === "subagent") {
-				return { block: true, reason: "当前计划由主 Agent 执行。" };
-			}
+		if (event.toolName === SUBAGENT_TOOL && state.phase !== "idle") {
+			return { block: true, reason: "当前计划阶段不可用此工具。" };
 		}
-		if (state.phase !== "planning") return;
-		if (event.toolName !== "bash") return;
-		const command: string = (event.input as { command?: string })?.command ?? "";
-		const reason = isPlanningBashBlocked(command);
-		if (reason) {
-			ctx.ui.notify(`⛔ 计划阶段禁止写操作: ${command.slice(0, 40)}`, "warning");
-			return { block: true, reason };
-		}
+		if (state.phase !== "planning" || event.toolName !== "bash") return;
+		const command = (event.input as { command?: string }).command ?? "";
+		if (!isMutatingCommand(command)) return;
+		ctx.ui.notify(`⛔ 计划阶段禁止写操作: ${command.slice(0, 40)}`, "warning");
+		return { block: true, reason: "计划制定阶段只允许读取和分析代码，禁止写入文件或安装依赖。" };
 	});
 
 	pi.on("agent_start", async () => {
-		if (state.phase === "implementing") cancelImplementationCompletion();
+		if (state.phase === "implementing") cancelCompletion();
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
 		if (state.phase === "implementing") {
-			scheduleImplementationCompletion(ctx);
+			scheduleCompletion(ctx);
 			return;
 		}
 		if (state.phase !== "planning") return;
-		const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
-		if (!lastAssistant) return;
-		const text = getTextContent(lastAssistant);
-		const planText = extractPlanSection(text);
-		const steps = extractPlanSteps(text);
-		if (!planText || steps.length === 0) return;
+		const message = [...event.messages].reverse().find(isAssistantMessage);
+		const plan = message ? extractPlan(messageText(message)) : undefined;
+		if (!plan) return;
 
-		state.planText = planText;
-		if (!state.planMdPath || !state.planCreatedAt) {
-			const written = writePlanMarkdown(ctx.cwd, planText, "clarifying");
-			state.planMdPath = written.filePath;
-			state.planCreatedAt = written.createdAt;
-		}
-		const planMdPath = state.planMdPath;
-		if (!planMdPath) return;
+		state.planText = plan;
 		setPhase("clarifying");
-		syncPlanMarkdown("clarifying");
-
-		// 选择框直接显示计划文件位置，避免计划提示被 overlay 遮住后延迟出现。
-		const decision = await askPlanDecision(ctx, planMdPath);
-		if (decision.execute) {
+		ctx.compact();
+		const review = await showPlanDecision(ctx, plan, state.planFile);
+		if (review.file) state.planFile = review.file;
+		save();
+		if (review.decision.execute) {
 			await startImplementation();
 			return;
 		}
 
 		state.adjustmentRounds++;
 		setPhase("planning");
-		syncPlanMarkdown("planning");
-		pi.sendUserMessage(
-			planMessageFor(
-				state.task,
-				decision.feedback || "用户希望调整计划，但没有提供更具体的说明。请先根据当前上下文补足最可能需要确认的点，再出新版计划。",
-			),
-			{ deliverAs: "followUp" },
-		);
+		pi.sendUserMessage(planningMessage(state.task, review.decision.feedback ?? "请继续澄清仍不确定的部分，再制定新版计划。"), { deliverAs: "followUp" });
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		const restored = restoreState(ctx);
-		if (restored) state = restored;
-		refresh();
+		state = restoreState(ctx) ?? emptyState();
+		requestHudRefresh();
 	});
 }

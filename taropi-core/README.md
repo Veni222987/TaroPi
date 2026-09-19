@@ -9,7 +9,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 📝 追加系统提示词 | `plain/APPEND_SYSTEM.md`：中文表达、工作方式与工具调用规则；按 `recommend/README.md` 复制后由 Pi 追加到默认提示词 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
-| 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机（`plan/`）：Aurum 独立制定计划 → 选择框（开始实施/补充内容）循环澄清 → 主 Agent 直接实施 |
+| 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机（`plan/`）：调研并在不确定时反复澄清 → TUI 写入计划文件并展示地址 → 按确认计划实施 |
 | 🔁 Loop | `/loop create\|start\|stop\|list\|status\|edit\|remove`（`loop/`）：crontab 驱动的定时循环，复用 agent 定义按固定间隔跑一个任务，每轮独立进程/独立 session，任务文本随时可编辑 |
 | 📣 Additionally | `/additionally` — 执行过程中实时插入补充说明 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
@@ -141,7 +141,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 taropi-core/
 ├── index.ts              # 入口：统一注册所有模块
 ├── sub-agents/           # subagent 工具（single / parallel / chain 派发）
-├── plan/                 # /plan 三阶段状态机（计划制定 / 澄清确认 / 主 Agent 实施）
+├── plan/                 # /plan 三阶段状态机（调研澄清 / TUI 确认与计划文件 / 主 Agent 实施）
 ├── loop/                 # /loop crontab 驱动的定时循环（复用 agent 定义，独立进程/独立 session）
 ├── additionally/         # /additionally 命令
 ├── permissions/          # 权限管控
