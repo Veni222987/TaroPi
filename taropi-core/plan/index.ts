@@ -1,8 +1,8 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { registerHudPanel, requestHudRefresh } from "../hud/registry.ts";
-import type { HudTheme } from "../hud/theme.ts";
+import { createHudClient, type HudClient } from "taropi-hud/api";
+import type { HudTheme } from "taropi-hud/theme";
 import { resolveModelAlias } from "../model-alias/store.ts";
 import { plannerPrompt } from "./prompts.ts";
 import { updatePlanFile, type PlanFile } from "./file.ts";
@@ -147,10 +147,11 @@ function restoreState(ctx: ExtensionContext): WorkflowState | undefined {
 	};
 }
 
-function registerPlanHud(getState: () => WorkflowState): void {
-	registerHudPanel({
+function registerPlanHud(hud: HudClient, getState: () => WorkflowState): void {
+	hud.register({
 		key: PERSIST_ENTRY_TYPE,
-		render(theme: HudTheme): string[] {
+		refresh: () => undefined,
+		render(_panel, theme: HudTheme): string[] {
 			const state = getState();
 			if (state.phase === "idle") return [];
 			const phase = state.phase === "planning" ? "计划制定" : state.phase === "clarifying" ? "澄清确认" : "直接实施";
@@ -169,6 +170,7 @@ function isMutatingCommand(command: string): boolean {
 
 // registerPlan 注册 /plan 三阶段状态机。
 export default function registerPlan(pi: ExtensionAPI): void {
+	const hud = createHudClient(pi);
 	let state = emptyState();
 	let planningFailure: string | undefined;
 	let completionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -176,7 +178,7 @@ export default function registerPlan(pi: ExtensionAPI): void {
 	const runtime = createRuntime(pi);
 
 	function save(): void {
-		requestHudRefresh();
+		hud.render();
 		persist(pi, state);
 	}
 
@@ -227,7 +229,10 @@ export default function registerPlan(pi: ExtensionAPI): void {
 
 		const launch = (): void => {
 			pi.sendMessage({ customType: "plan-implementation-start", content: "计划已确认，进入主 Agent 实施阶段。", display: true }, { triggerTurn: false });
-			pi.sendUserMessage(implementationMessage(state.task, state.planText), { deliverAs: "followUp" });
+			pi.sendMessage(
+				{ customType: "plan-implementation-context", content: implementationMessage(state.task, state.planText), display: false },
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
 		};
 
 		ctx.compact({
@@ -239,7 +244,7 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		});
 	}
 
-	registerPlanHud(() => state);
+	registerPlanHud(hud, () => state);
 
 	pi.registerCommand("plan", {
 		description: "启动计划流程：制定计划 → 澄清确认 → 主 Agent 实施",
@@ -335,6 +340,6 @@ export default function registerPlan(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		planningFailure = undefined;
 		state = restoreState(ctx) ?? emptyState();
-		requestHudRefresh();
+		hud.render();
 	});
 }

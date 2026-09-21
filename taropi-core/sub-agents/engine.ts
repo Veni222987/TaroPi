@@ -17,7 +17,7 @@ import {
   updateRun,
   updateToolCall,
 } from "./state.ts";
-import { requestHudRefresh } from "../hud/registry.ts";
+import { requestHudRender } from "../hud-adapt.ts";
 
 export const MAX_PARALLEL_TASKS = 8;
 export const MAX_CONCURRENCY = 4;
@@ -30,13 +30,13 @@ function scheduleHudRefresh(immediate = false): void {
   if (immediate) {
     if (pendingHudRefresh) clearTimeout(pendingHudRefresh);
     pendingHudRefresh = undefined;
-    requestHudRefresh();
+    requestHudRender();
     return;
   }
   if (pendingHudRefresh) return;
   pendingHudRefresh = setTimeout(() => {
     pendingHudRefresh = undefined;
-    requestHudRefresh();
+    requestHudRender();
   }, UPDATE_INTERVAL_MS);
   pendingHudRefresh.unref?.();
 }

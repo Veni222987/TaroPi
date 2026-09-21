@@ -1,0 +1,16 @@
+{
+  "name": "taropi-hud",
+  "version": "0.1.0",
+  "description": "TaroPi 可扩展 HUD 宿主与子版块开发接口。",
+  "keywords": ["pi-package", "pi-hud"],
+  "pi": { "extensions": ["./index.ts"] },
+  "exports": {
+    ".": "./index.ts",
+    "./api": "./api.ts",
+    "./theme": "./theme.ts",
+    "./protocol": "./protocol.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

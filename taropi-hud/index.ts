@@ -1,11 +1,10 @@
 /**
- * HUD 插件 —— 赛博朋克风格的常驻状态面板，同时作为全局看板中心。
- * 其他插件可通过 hud/registry.ts 的 registerHudPanel / requestHudRefresh
- * 向 HUD 注册内容面板，实现统一的视觉入口。
+ * HUD 插件：提供赛博朋克风格的常驻基础状态看板和跨扩展子版块宿主。
+ * 外部包通过 taropi-hud/api 的 createHudClient 注册同时具有刷新与文本渲染能力的版块。
  *
  * 移植自 pi-shannon-statusline（https://github.com/RealAlexandreAI/pi-shannon-statusline）。
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readdirSync, existsSync, readFileSync } from "node:fs";
@@ -16,10 +15,12 @@ import {
   FG, COMMENT, PINK, GREEN, ORANGE, CYAN, PURPLE, YELLOW, BLUE,
   R, D, SEP, DIVIDER, hudTheme,
 } from "./theme.ts";
-import type { HudTheme } from "./theme.ts";
-import { getHudPanels, registerHudPanel, requestHudRefresh, setHudRefreshCallback } from "./registry.ts";
+import { HUD_EVENTS, HUD_PROTOCOL_VERSION, type HudPanelProvider, type HudRefreshRequest } from "./protocol.ts";
+import { HudPanelRegistry } from "./registry.ts";
 
 const execFileAsync = promisify(execFile);
+const panels = new HudPanelRegistry();
+const HUD_HOST_SLOT = Symbol.for("taropi-hud-host");
 
 // ═══════════════════════════════════════════════════════════════
 // 类型定义
@@ -67,8 +68,8 @@ let cumInputTokens = 0;
 let cumCacheReadTokens = 0;
 let cumCacheWriteTokens = 0;
 
-// 缓存最新的 ctx，供 requestHudRefresh 触发时使用
-let latestCtx: any = null;
+// 缓存最新的 ctx，供 HUD 重绘与子版块刷新使用
+let latestCtx: ExtensionContext | undefined;
 
 // ═══════════════════════════════════════════════════════════════
 // 图标（与 shannon-statusline 保持一致）
@@ -110,6 +111,7 @@ function truncateTailSegment(segment: string, maxLen: number): string {
   return `…${base.slice(-budget)}${ext}`;
 }
 
+// shortenDisplayPath 将绝对路径转换为适合 HUD 显示的缩写路径。
 export function shortenDisplayPath(fullPath: string, home: string, maxLen: number): string {
   if (!fullPath) return "";
   let display = fullPath;
@@ -428,11 +430,16 @@ async function buildHud(ctx: any): Promise<string[]> {
   }
 
   // ── 插件注册的扩展面板 ──
-  for (const panel of getHudPanels()) {
-    const panelLines = panel.render(hudTheme);
-    if (panelLines.length > 0) {
+  for (const panel of panels.get()) {
+    try {
+      const panelLines = panel.provider.render(panel.state, hudTheme, 67);
+      if (panelLines.length > 0) {
+        lines.push(DIVIDER);
+        lines.push(...panelLines);
+      }
+    } catch {
       lines.push(DIVIDER);
-      lines.push(...panelLines);
+      lines.push(`${c("!", PINK)} ${c(panel.provider.key, PINK)} ${dim("渲染失败")}`);
     }
   }
 
@@ -443,32 +450,81 @@ async function buildHud(ctx: any): Promise<string[]> {
 // HUD 刷新
 // ═══════════════════════════════════════════════════════════════
 
-function refreshHud(ctx?: any) {
+async function refreshHud(ctx?: ExtensionContext): Promise<void> {
   const target = ctx ?? latestCtx;
   if (!target) return;
-  buildHud(target)
-    .then((lines) => {
-      if (lines.length > 0) target.ui.setWidget("taropi-hud", lines, { placement: "belowEditor" });
-    })
-    .catch(() => {});
+  try {
+    const lines = await buildHud(target);
+    if (lines.length > 0) target.ui.setWidget("taropi-hud", lines, { placement: "belowEditor" });
+  } catch {
+    // HUD 基础信息采集失败时保留上一次终端内容。
+  }
+}
+
+async function refreshPanels(request: HudRefreshRequest, ctx?: ExtensionContext): Promise<string[]> {
+  const target = ctx ?? latestCtx;
+  const registered = panels.get(request.key);
+  if (!target) return registered.map((panel) => panel.provider.key);
+  const results = await panels.refresh(request.key, target, request.reason);
+  await refreshHud(target);
+  return results.flatMap((result, index) => (result.status === "rejected" ? [registered[index]?.provider.key ?? "unknown"] : []));
 }
 
 // ═══════════════════════════════════════════════════════════════
 // 扩展入口
 // ═══════════════════════════════════════════════════════════════
 
-export function registerHud(pi: ExtensionAPI) {
-  pi.events.on("taropi:hud:register", (provider: unknown) => {
-    if (!provider || typeof provider !== "object") return;
-    const panel = provider as { key?: unknown; render?: unknown };
-    if (typeof panel.key !== "string" || typeof panel.render !== "function") return;
-    registerHudPanel({ key: panel.key, render: panel.render as (theme: HudTheme) => string[] });
-    requestHudRefresh();
+// registerHud 注册 HUD 宿主、基础状态看板和跨扩展刷新协议。
+export function registerHud(pi: ExtensionAPI): void {
+  const hostFlags = globalThis as typeof globalThis & Record<symbol, boolean | undefined>;
+  if (hostFlags[HUD_HOST_SLOT]) return;
+  hostFlags[HUD_HOST_SLOT] = true;
+  pi.events.on(HUD_EVENTS.register, (value: unknown) => {
+    const registration = value as { version?: unknown; provider?: unknown } | undefined;
+    const provider = registration?.provider as Partial<HudPanelProvider> | undefined;
+    if (registration?.version !== HUD_PROTOCOL_VERSION || !provider || typeof provider.key !== "string") return;
+    if (typeof provider.refresh !== "function" || typeof provider.render !== "function") return;
+    if (provider.timeoutMs !== undefined && (!Number.isFinite(provider.timeoutMs) || provider.timeoutMs <= 0)) return;
+    panels.register(provider as HudPanelProvider);
+    void refreshPanels({ key: provider.key, reason: "initial" });
   });
-  pi.events.on("taropi:hud:refresh", () => requestHudRefresh());
+  pi.events.on(HUD_EVENTS.unregister, (value: unknown) => {
+    const request = value as { key?: unknown; provider?: unknown } | undefined;
+    if (typeof request?.key !== "string" || !request.provider) return;
+    panels.unregister(request.key, request.provider as HudPanelProvider);
+    refreshHud();
+  });
+  pi.events.on(HUD_EVENTS.render, () => refreshHud());
+  pi.events.on(HUD_EVENTS.refresh, (value: unknown) => {
+    const request = value as Partial<HudRefreshRequest> | undefined;
+    if (!request || (request.key !== undefined && typeof request.key !== "string")) return;
+    const normalized: HudRefreshRequest = {
+      key: request.key,
+      reason: request.reason === "initial" || request.reason === "command" ? request.reason : "external",
+      requestId: request.requestId,
+    };
+    void refreshPanels(normalized).then((failedKeys) => {
+      if (normalized.requestId) pi.events.emit(HUD_EVENTS.refreshResult, { requestId: normalized.requestId, failedKeys });
+    });
+  });
 
-  // 注册刷新回调，供其他插件通过 requestHudRefresh() 触发重渲染
-  setHudRefreshCallback(() => refreshHud());
+  pi.registerCommand("hud-fresh", {
+    description: "并发刷新全部 HUD 子版块并统一显示结果",
+    handler: async (_args, ctx) => {
+      const failedKeys = await refreshPanels({ reason: "command" }, ctx);
+      if (failedKeys.length > 0) ctx.ui.notify(`HUD 刷新完成，失败: ${failedKeys.join(", ")}`, "warning");
+      else ctx.ui.notify("HUD 已刷新", "info");
+    },
+  });
+
+  pi.events.emit(HUD_EVENTS.hostReady, { version: HUD_PROTOCOL_VERSION });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    panels.invalidate();
+    latestCtx = undefined;
+    if (ctx.mode === "tui") ctx.ui.setWidget("taropi-hud", undefined, { placement: "belowEditor" });
+    hostFlags[HUD_HOST_SLOT] = false;
+  });
 
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
@@ -485,7 +541,7 @@ export function registerHud(pi: ExtensionAPI) {
     }
     // 隐藏原生 footer，避免与 HUD 信息重复
     ctx.ui.setFooter(() => ({ invalidate() {}, render: () => [] }));
-    refreshHud(ctx);
+    void refreshPanels({ reason: "initial" }, ctx);
   });
 
   pi.on("model_select", (event, ctx) => {
@@ -559,3 +615,7 @@ export function registerHud(pi: ExtensionAPI) {
     refreshHud(ctx);
   });
 }
+
+export { createHudClient } from "./api.ts";
+export type { HudClient, HudPanelHandle } from "./api.ts";
+export type { HudPanelProvider, HudPanelState, HudRefreshContext, HudRefreshReason } from "./protocol.ts";

@@ -12,7 +12,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机（`plan/`）：调研并在不确定时反复澄清 → TUI 写入计划文件并展示地址 → 按确认计划实施 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索（Brave/Exa/OpenAI）、URL 正文抓取、GitHub 仓库/文件、图片、本地 PDF 文本提取 |
-| 🖥️ HUD 状态面板 | 常驻显示 Git 状态、模型/上下文用量、工具调用统计等信息的赛博朋克风格 HUD |
+| 🖥️ HUD 状态面板 | 常驻显示 Git 状态、模型/上下文用量、工具调用统计等信息；外部包可通过 `taropi-hud` 注册带刷新能力的文本子版块，`/hud-fresh` 并发刷新全部子版块 |
 
 ## 开发校验
 
@@ -158,8 +158,10 @@ TaroPi/
 │   ├── permissions/      # 权限管控
 │   ├── web-access/       # 网络访问：web_search / fetch_content / get_search_content / source_check
 │   │   └── searchimpl/   # 搜索来源适配器（Brave / Exa / OpenAI），新增来源在此追加实现
-│   └── hud/              # 常驻 HUD 状态面板
-└── taropi-plain/         # 纯文本资源：APPEND_SYSTEM / agents / skills / recommend
+│   ├── hud-adapt.ts      # core 内部模块接入 HUD 的统一适配层
+│   └── ...
+├── taropi-hud/            # 可独立安装的 HUD 宿主、协议与外部开发 API
+├── taropi-plain/         # 纯文本资源：APPEND_SYSTEM / agents / skills / recommend
     ├── APPEND_SYSTEM.md  # 中文表达、工作方式与工具调用规则；按 recommend 配置到 ~/.pi/agent/ 后由 Pi 加载
     ├── agents/           # subagent 定义（scout / planner / developer / reviewer），会话启动时自动同步到 ~/.pi/agent/agents/
     ├── recommend/        # 推荐配置及其安装说明

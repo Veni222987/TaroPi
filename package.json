@@ -7,7 +7,8 @@
   ],
   "workspaces": [
     "taropi-core",
-    "taropi-draw"
+    "taropi-draw",
+    "taropi-hud"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
