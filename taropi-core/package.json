@@ -1,6 +1,6 @@
 {
   "name": "taropi-core",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "TaroPi 基础扩展: 子Agent、主动提问、web_access等。",
   "keywords": [
     "pi-package"
