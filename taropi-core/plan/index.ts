@@ -5,7 +5,8 @@ import { registerHudPanel, requestHudRefresh } from "../hud/registry.ts";
 import type { HudTheme } from "../hud/theme.ts";
 import { resolveModelAlias } from "../model-alias/store.ts";
 import { plannerPrompt } from "./prompts.ts";
-import { showPlanDecision, updatePlanFile, type PlanFile } from "./tui.ts";
+import { updatePlanFile, type PlanFile } from "./file.ts";
+import { showPlanDecision } from "./tui.ts";
 
 const PLANNER_MODEL_NAME = "Aurum";
 const PERSIST_ENTRY_TYPE = "plan-workflow";
@@ -46,6 +47,12 @@ function messageText(message: AssistantMessage): string {
 		.filter((content): content is TextContent => content.type === "text")
 		.map((content) => content.text)
 		.join("\n");
+}
+
+// planningFailureReason 返回计划请求终止时可展示的失败原因。
+export function planningFailureReason(message: AssistantMessage | undefined): string | undefined {
+	if (!message || (message.stopReason !== "error" && message.stopReason !== "aborted")) return undefined;
+	return message.errorMessage?.trim() || (message.stopReason === "aborted" ? "请求已取消" : "模型请求失败");
 }
 
 function extractPlan(message: string): string | undefined {
@@ -163,6 +170,7 @@ function isMutatingCommand(command: string): boolean {
 // registerPlan 注册 /plan 三阶段状态机。
 export default function registerPlan(pi: ExtensionAPI): void {
 	let state = emptyState();
+	let planningFailure: string | undefined;
 	let completionTimer: ReturnType<typeof setTimeout> | undefined;
 	let completionGeneration = 0;
 	const runtime = createRuntime(pi);
@@ -185,6 +193,7 @@ export default function registerPlan(pi: ExtensionAPI): void {
 
 	function reset(): void {
 		cancelCompletion();
+		planningFailure = undefined;
 		state = emptyState();
 		save();
 	}
@@ -210,13 +219,24 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		completionTimer = setTimeout(check, 0);
 	}
 
-	async function startImplementation(): Promise<void> {
+	async function startImplementation(ctx: ExtensionContext): Promise<void> {
 		cancelCompletion();
 		setPhase("implementing");
 		updatePlanFile(state.planFile, state.planText, "implementing");
 		await runtime.enterImplementation();
-		pi.sendMessage({ customType: "plan-implementation-start", content: "计划已确认，进入主 Agent 实施阶段。", display: true }, { triggerTurn: false });
-		pi.sendUserMessage(implementationMessage(state.task, state.planText), { deliverAs: "followUp" });
+
+		const launch = (): void => {
+			pi.sendMessage({ customType: "plan-implementation-start", content: "计划已确认，进入主 Agent 实施阶段。", display: true }, { triggerTurn: false });
+			pi.sendUserMessage(implementationMessage(state.task, state.planText), { deliverAs: "followUp" });
+		};
+
+		ctx.compact({
+			onComplete: launch,
+			onError: (error) => {
+				ctx.ui.notify(`计划上下文压缩失败，将直接开始实施：${error.message}`, "warning");
+				launch();
+			},
+		});
 	}
 
 	registerPlanHud(() => state);
@@ -273,6 +293,7 @@ export default function registerPlan(pi: ExtensionAPI): void {
 	});
 
 	pi.on("agent_start", async () => {
+		if (state.phase === "planning") planningFailure = undefined;
 		if (state.phase === "implementing") cancelCompletion();
 	});
 
@@ -283,17 +304,18 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		}
 		if (state.phase !== "planning") return;
 		const message = [...event.messages].reverse().find(isAssistantMessage);
+		planningFailure = planningFailureReason(message);
+		if (planningFailure) return;
 		const plan = message ? extractPlan(messageText(message)) : undefined;
 		if (!plan) return;
 
 		state.planText = plan;
 		setPhase("clarifying");
-		ctx.compact();
 		const review = await showPlanDecision(ctx, plan, state.planFile);
 		if (review.file) state.planFile = review.file;
 		save();
 		if (review.decision.execute) {
-			await startImplementation();
+			await startImplementation(ctx);
 			return;
 		}
 
@@ -302,7 +324,16 @@ export default function registerPlan(pi: ExtensionAPI): void {
 		pi.sendUserMessage(planningMessage(state.task, review.decision.feedback ?? "请继续澄清仍不确定的部分，再制定新版计划。"), { deliverAs: "followUp" });
 	});
 
+	pi.on("agent_settled", async (_event, ctx) => {
+		if (state.phase !== "planning" || !planningFailure) return;
+		const reason = planningFailure;
+		reset();
+		await runtime.restore();
+		ctx.ui.notify(`计划制定失败，已退出计划模式，可重新执行 /plan。\n${reason}`, "error");
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
+		planningFailure = undefined;
 		state = restoreState(ctx) ?? emptyState();
 		requestHudRefresh();
 	});

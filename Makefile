@@ -1,7 +1,11 @@
-.PHONY: release
+.PHONY: test release
 
 PACKAGE ?= taropi-core
 REMOTE ?= origin
+
+# test 运行 taropi-core 单元测试并生成本地覆盖率报告。
+test:
+	npm run test:coverage
 
 # release 递增指定 workspace 的补丁版本，提交当前工作区内容并推送当前 GitHub 分支。
 release:

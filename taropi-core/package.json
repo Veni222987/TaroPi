@@ -10,7 +10,7 @@
       "./index.ts"
     ],
     "skills": [
-      "./plain/skills"
+      "../taropi-plain/skills"
     ]
   },
   "peerDependencies": {
@@ -21,7 +21,12 @@
     "typebox": "*"
   },
   "dependencies": {
-    "pi-web-access": "github:nicobailon/pi-web-access",
-    "@juicesharp/rpiv-ask-user-question": "^1.20.0"
+    "@juicesharp/rpiv-ask-user-question": "2.10.1",
+    "@juicesharp/rpiv-i18n": "2.10.1",
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.16.11",
+    "turndown": "^7.2.4",
+    "undici": "^8.10.2",
+    "unpdf": "^1.6.2"
   }
 }

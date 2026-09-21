@@ -109,7 +109,7 @@ function createPendingResult(
 // register 注册 subagent 工具、紧凑面板生命周期与相关快捷键。
 export function register(pi: ExtensionAPI) {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const packageAgentsDir = path.join(__dirname, "..", "plain", "agents");
+  const packageAgentsDir = path.join(__dirname, "..", "..", "taropi-plain", "agents");
   const userAgentsDir = path.join(getAgentDir(), "agents");
 
   pi.registerShortcut("ctrl+shift+\\", {
