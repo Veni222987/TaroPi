@@ -6,15 +6,21 @@ TaroPi 整合包，一个入口加载所有核心能力。
 
 | 能力 | 说明 |
 |------|------|
-| 📝 追加系统提示词 | `plain/APPEND_SYSTEM.md`：中文表达、工作方式与工具调用规则；按 `recommend/README.md` 复制后由 Pi 追加到默认提示词 |
+| 📝 追加系统提示词 | `../taropi-plain/APPEND_SYSTEM.md`：中文表达、工作方式与工具调用规则；按 `../taropi-plain/recommend/README.md` 复制后由 Pi 追加到默认提示词 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
 | 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机（`plan/`）：调研并在不确定时反复澄清 → TUI 写入计划文件并展示地址 → 按确认计划实施 |
-| 🔁 Loop | `/loop create\|start\|stop\|list\|status\|edit\|remove`（`loop/`）：crontab 驱动的定时循环，复用 agent 定义按固定间隔跑一个任务，每轮独立进程/独立 session，任务文本随时可编辑 |
-| 📣 Additionally | `/additionally` — 执行过程中实时插入补充说明 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
-| 🌐 网络访问 | 网页搜索、URL 抓取、GitHub 克隆、PDF 提取、YouTube 理解 |
+| 🌐 网络访问 | 网页搜索（Brave/Exa/OpenAI）、URL 正文抓取、GitHub 仓库/文件、图片、本地 PDF 文本提取 |
 | 🖥️ HUD 状态面板 | 常驻显示 Git 状态、模型/上下文用量、工具调用统计等信息的赛博朋克风格 HUD |
+
+## 开发校验
+
+```bash
+make test
+```
+
+`make test` 使用 Vitest 运行 `taropi-core` 单元测试，并在 `coverage/` 生成 text、HTML 与 LCOV 覆盖率报告。
 
 ## 安装
 
@@ -23,7 +29,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 ```json
 {
   "packages": [
-    "/path/to/taropi-core"
+    "/path/to/TaroPi"
   ]
 }
 ```
@@ -47,16 +53,18 @@ TaroPi 整合包，一个入口加载所有核心能力。
 
 首次启动时会自动生成该文件并写入默认规则。
 
-### 网络访问（[pi-web-access](https://github.com/nicobailon/pi-web-access)）
+### 网络访问（`web-access/`）
 
-**无需任何 API key 即可使用**：Exa MCP 提供零配置搜索，开箱即用。
+提供四个工具：`web_search`、`fetch_content`、`get_search_content`、`source_check`。搜索源覆盖 Brave、Exa、OpenAI；抓取覆盖网页正文、GitHub 仓库/文件、图片和本地 PDF 文本解析。
 
-如需接入其他搜索提供商，编辑 `~/.pi/web-search.json`：
+**无需任何 API key 即可使用**：Exa 在未配置 Key 时通过本机 [`mcporter`](https://github.com/badlogic/mcporter) 调用其托管 MCP 实现零配置搜索，开箱即用（需要 `mcporter` 在 PATH 中）。
+
+如需接入其他搜索提供商，编辑 `~/.pi/agent/web-search.json`：
 
 ```json
 {
   "provider": "brave",
-  "workflow": "summary-review"
+  "workflow": "none"
 }
 ```
 
@@ -66,51 +74,55 @@ TaroPi 整合包，一个入口加载所有核心能力。
 |--------|---------|---------|---------|
 | Brave Search | `braveApiKey` | `BRAVE_API_KEY` | https://brave.com/search/api/ |
 | Exa | `exaApiKey` | `EXA_API_KEY` | https://exa.ai |
-| Tavily | `tavilyApiKey` | `TAVILY_API_KEY` | https://tavily.com |
-| Perplexity | `perplexityApiKey` | `PERPLEXITY_API_KEY` | https://www.perplexity.ai/settings/api |
-| OpenAI | `openaiApiKey` | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
-| Google Gemini | `geminiApiKey` | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
-| Parallel | `parallelApiKey` | `PARALLEL_API_KEY` | https://parallel.ai |
+| OpenAI | `openaiApiKey`（或 Pi 的 OpenAI/Codex 登录） | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
 
-#### 完整示例配置（`~/.pi/web-search.json`）
+`provider` 可选值：`auto`（默认，Exa 优先，Codex 会话下 OpenAI 优先）/ `brave` / `exa` / `openai` / 数组（同时查询多个来源）
+
+`workflow` 可选值：`none`（默认）/ `auto-summary`（使用当前 Pi 模型生成摘要）
+
+#### 完整示例配置（`~/.pi/agent/web-search.json`）
 
 ```json
 {
-  "provider": "brave",
-  "workflow": "summary-review",
+  "provider": "auto",
+  "workflow": "none",
 
   "braveApiKey": "BSA_...",
   "exaApiKey": "exa-...",
-  "tavilyApiKey": "tvly-...",
-  "perplexityApiKey": "pplx-...",
   "openaiApiKey": "sk-...",
-  "geminiApiKey": "AIza...",
 
-  "searchModel": "gemini-2.5-flash",
   "summaryModel": "anthropic/claude-haiku-4-5",
-  "curatorTimeoutSeconds": 20,
+
+  "fetch": {
+    "defaultMode": "readable",
+    "allowedModes": ["readable", "raw", "answer"]
+  },
 
   "githubClone": {
     "enabled": true,
     "maxRepoSizeMB": 350,
-    "clonePath": "/tmp/pi-github-repos"
+    "clonePath": "/tmp/pi-taropi-github-repos"
   },
 
-  "youtube": {
+  "pdf": {
     "enabled": true,
-    "preferredModel": "gemini-2.5-flash"
+    "maxSizeMB": 20,
+    "maxPages": 100
   },
 
-  "shortcuts": {
-    "curate": "ctrl+shift+s",
-    "activity": "ctrl+shift+w"
+  "authFetch": {
+    "work": { "hosts": ["intranet.example.com"], "cache": "session" }
+  },
+  "allowBrowserCookies": false,
+
+  "ssrf": {
+    "allowRanges": [],
+    "trustEnvProxy": false
   }
 }
 ```
 
-`provider` 可选值：`brave` / `exa` / `tavily` / `perplexity` / `openai` / `gemini`
-
-`workflow` 可选值：`summary-review`（默认，人工审阅）/ `auto-summary`（自动摘要）/ `none`
+`authFetch` 登录态抓取默认关闭：仅在 `allowBrowserCookies: true` 且显式声明 host 白名单的 profile 时，`fetch_content` 的 `auth` 参数才能读取本机浏览器 Cookie，且不允许跨源重定向。
 
 ## Subagent 面板快捷键
 
@@ -138,27 +150,29 @@ TaroPi 整合包，一个入口加载所有核心能力。
 ## 文件结构
 
 ```
-taropi-core/
-├── index.ts              # 入口：统一注册所有模块
-├── sub-agents/           # subagent 工具（single / parallel / chain 派发）
-├── plan/                 # /plan 三阶段状态机（调研澄清 / TUI 确认与计划文件 / 主 Agent 实施）
-├── loop/                 # /loop crontab 驱动的定时循环（复用 agent 定义，独立进程/独立 session）
-├── additionally/         # /additionally 命令
-├── permissions/          # 权限管控
-├── hud/                  # 常驻 HUD 状态面板
-└── plain/                # 纯文本资源：APPEND_SYSTEM / agents / skills
-    ├── APPEND_SYSTEM.md  # 中文表达、工作方式与工具调用规则；按 recommend 复制到 ~/.pi/agent/ 后由 Pi 加载
+TaroPi/
+├── taropi-core/
+│   ├── index.ts          # 入口：统一注册所有模块
+│   ├── sub-agents/       # subagent 工具（single / parallel / chain 派发）
+│   ├── plan/             # /plan 三阶段状态机（调研澄清 / TUI 确认与计划文件 / 主 Agent 实施）
+│   ├── permissions/      # 权限管控
+│   ├── web-access/       # 网络访问：web_search / fetch_content / get_search_content / source_check
+│   │   └── searchimpl/   # 搜索来源适配器（Brave / Exa / OpenAI），新增来源在此追加实现
+│   └── hud/              # 常驻 HUD 状态面板
+└── taropi-plain/         # 纯文本资源：APPEND_SYSTEM / agents / skills / recommend
+    ├── APPEND_SYSTEM.md  # 中文表达、工作方式与工具调用规则；按 recommend 配置到 ~/.pi/agent/ 后由 Pi 加载
     ├── agents/           # subagent 定义（scout / planner / developer / reviewer），会话启动时自动同步到 ~/.pi/agent/agents/
+    ├── recommend/        # 推荐配置及其安装说明
     └── skills/           # 可发现的 skill（SKILL.md）
 ```
 
 ### 新增 skill
 
-新建 `plain/skills/name/SKILL.md`（frontmatter 含 name / description），无需改 package.json，/reload 即可生效。
+新建 `../taropi-plain/skills/name/SKILL.md`（frontmatter 含 name / description），无需改 package.json，/reload 即可生效。
 
 ## 依赖
 
 - `@earendil-works/pi-coding-agent` (peer)
 - `typebox` (peer)
-- `pi-web-access` (bundled，随 `npm install` 自动安装)
 - `@juicesharp/rpiv-ask-user-question` (bundled，随 `npm install` 自动安装)
+- `@mozilla/readability`、`linkedom`、`turndown`、`undici`、`unpdf` (bundled，`web-access/` 网页正文提取、代理转发与本地 PDF 解析所需，随 `npm install` 自动安装)

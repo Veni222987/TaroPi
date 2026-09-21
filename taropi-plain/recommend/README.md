@@ -7,12 +7,12 @@
 把下面整段 prompt 发给 AI，即可让它根据本目录的配置映射完成**增量同步**，而不是直接覆盖你已有的 Pi 配置：
 
 ```text
-你正在 TaroPi 仓库中执行推荐配置同步。请自动读取 recommend 配置，并以“比较后最小改动合并”的方式写入对应目标位置。
+你正在 TaroPi 仓库中执行推荐配置同步。请自动读取 taropi-plain/recommend 配置，并以“比较后最小改动合并”的方式写入对应目标位置。
 
-目标：让 recommend/README.md 中“文件 → 复制到”表格列出的推荐配置生效，同时保留用户已有的无关配置；不要直接 cp 或整体覆盖已存在的目标文件。
+目标：让 taropi-plain/recommend/README.md 中“文件 → 复制到”表格列出的推荐配置生效，同时保留用户已有的无关配置；不要直接 cp 或整体覆盖已存在的目标文件。
 
 执行流程：
-1. 定位仓库根目录，完整读取 recommend/README.md，解析其“文件 / 复制到 / 说明”表格。表格是本次同步的唯一文件映射清单；源路径相对仓库根目录，目标路径中的 ~/ 必须展开为当前用户的 HOME。
+1. 定位仓库根目录，完整读取 taropi-plain/recommend/README.md，解析其“文件 / 复制到 / 说明”表格。表格是本次同步的唯一文件映射清单；源路径相对仓库根目录，目标路径中的 ~/ 必须展开为当前用户的 HOME。
 2. 逐项读取源文件；检查目标文件是否存在，并读取其现有内容。先展示或记录每项差异，再执行写入。
 3. 目标父目录不存在时才创建。源文件不存在、目标 JSON 格式非法或无法安全判断合并语义时，不要覆盖目标文件：说明原因并请求用户决定。
 4. 按文件类型增量处理：
@@ -20,22 +20,22 @@
    - permissions.json：除保留目标其他字段外，推荐的 externalWriteConfirm 取源值；deny 必须按原有顺序保留目标规则，并仅追加源中尚不存在的规则。规则以完整 JSON 结构深度相等判重，不能因为相同 pattern 就删除用户携带的不同 tool 或 reason。
    - keybindings.json 与 web-search.json：保留目标中推荐文件未声明的键；推荐文件声明的键以源值为准。只有实际内容变化时才写入。
    - APPEND_SYSTEM.md 等 Markdown/纯文本追加配置：目标不存在时创建。目标已存在时，按二级标题分段比较；完全一致的段落跳过，目标没有的推荐段落才追加。若同名段落内容不同，不要静默覆盖用户内容，报告冲突并等待确认。
-5. 不修改 recommend/ 下的源文件，不修改 README 映射表，也不要顺带处理表格之外的配置（例如 models.json），除非用户另行明确要求。
+5. 不修改 taropi-plain/recommend/ 下的源文件，不修改 README 映射表，也不要顺带处理表格之外的配置（例如 models.json），除非用户另行明确要求。
 6. 完成后逐项报告：源路径、目标路径、结果（新建 / 合并更新 / 无变化 / 需用户确认）、保留了哪些用户配置；最后提醒用户在 Pi 中执行 /reload 或重启以加载配置。
 
 当前表格中的常见映射包括：
-- taropi-core/plain/APPEND_SYSTEM.md → ~/.pi/agent/APPEND_SYSTEM.md
-- recommend/permissions.json → ~/.pi/agent/permissions.json
-- recommend/web-search.json → ~/.pi/web-search.json
-- recommend/keybindings.json → ~/.pi/agent/keybindings.json
+- taropi-plain/APPEND_SYSTEM.md → ~/.pi/agent/APPEND_SYSTEM.md
+- taropi-plain/recommend/permissions.json → ~/.pi/agent/permissions.json
+- taropi-plain/recommend/web-search.json → ~/.pi/agent/web-search.json
+- taropi-plain/recommend/keybindings.json → ~/.pi/agent/keybindings.json
 ```
 
 | 文件 | 复制到 | 说明 |
 |------|--------|------|
-| `taropi-core/plain/APPEND_SYSTEM.md` | `~/.pi/agent/APPEND_SYSTEM.md` | 追加中文表达、工作方式和工具调用规则，同时保留 Pi 默认的工具、skills 与项目上下文注入 |
-| `permissions.json` | `~/.pi/agent/permissions.json` | taropi-permissions 权限规则；插件启动时自动读取并与默认规则合并 |
-| `web-search.json` | `~/.pi/web-search.json` | pi-web-access 的 `web_search` 默认走纯 API 搜索（`workflow: "none"`），跳过浏览器 curator；规避该包 `openCuratorBrowser` 中 `sendCuratorFallbackUpdate` 作用域 bug 导致的崩溃（`try`/`catch` 跨块引用变量） |
-| `keybindings.json` | `~/.pi/agent/keybindings.json` | 将中断从 `Esc` 改为 `Ctrl+C`（更符合终端习惯），`Esc` 改为清空编辑器；复制后 `/reload` 生效 |
+| `taropi-plain/APPEND_SYSTEM.md` | `~/.pi/agent/APPEND_SYSTEM.md` | 追加中文表达、工作方式和工具调用规则，同时保留 Pi 默认的工具、skills 与项目上下文注入 |
+| `taropi-plain/recommend/permissions.json` | `~/.pi/agent/permissions.json` | taropi-permissions 权限规则；插件启动时自动读取并与默认规则合并 |
+| `taropi-plain/recommend/web-search.json` | `~/.pi/agent/web-search.json` | taropi-core 网络访问模块（`web-access/`）的默认配置：`workflow: "none"` 表示搜索直接返回结果，不额外调用模型生成摘要 |
+| `taropi-plain/recommend/keybindings.json` | `~/.pi/agent/keybindings.json` | 将中断从 `Esc` 改为 `Ctrl+C`（更符合终端习惯），`Esc` 改为清空编辑器；复制后 `/reload` 生效 |
 
 ## 追加系统提示词（APPEND_SYSTEM.md）
 
@@ -45,14 +45,14 @@
 
 ```bash
 mkdir -p ~/.pi/agent
-cp taropi-core/plain/APPEND_SYSTEM.md ~/.pi/agent/APPEND_SYSTEM.md
+cp taropi-plain/APPEND_SYSTEM.md ~/.pi/agent/APPEND_SYSTEM.md
 ```
 
 文件名必须保持全大写。复制后重启 Pi，或在 Pi 中执行 `/reload`。
 
 ## sub-agent 模型档位（Aurum / Argentum / Cuprum）
 
-`taropi-core` 的 `scout`/`planner`/`worker` 三个 sub-agent（`taropi-core/plain/agents/*.md`）不再直接写死具体模型 ID，而是各自声明一个档位角色名：
+`taropi-plain` 的 `scout`/`planner`/`worker` 三个 sub-agent（`taropi-plain/agents/*.md`）各自声明一个档位角色名：
 
 | Agent | 档位角色名 | 语义 |
 |-------|-----------|------|
@@ -120,7 +120,7 @@ cp taropi-core/plain/APPEND_SYSTEM.md ~/.pi/agent/APPEND_SYSTEM.md
 安装：
 
 ```bash
-cp recommend/keybindings.json ~/.pi/agent/keybindings.json
+cp taropi-plain/recommend/keybindings.json ~/.pi/agent/keybindings.json
 ```
 
 然后在 pi 中执行 `/reload` 即可生效，无需重启 session。

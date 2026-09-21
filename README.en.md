@@ -6,19 +6,27 @@ A personal collection of [pi coding agent](https://pi.dev) extensions (monorepo)
 
 ## Architecture
 
-![TaroPi Architecture](./resource/architecture.png)
+```mermaid
+flowchart LR
+  PI[pi coding agent]
+  CORE[taropi-core\ncore extension]
+  DRAW[taropi-draw\ndiagram generation extension]
+  PLAIN[taropi-plain\nsystem prompt, agents, and skills]
+
+  PI --> CORE
+  PI --> DRAW
+  PI --> PLAIN
+  CORE -.loads bundled agent definitions.-> PLAIN
+```
 
 ## Recommended Setup
 
-Before installing, copy the config files as described in [`recommend/README.md`](./recommend/README.md).
+Before installing, copy the config files as described in [`taropi-plain/recommend/README.md`](./taropi-plain/recommend/README.md).
 
 ## Install
 
 ```bash
-# One-liner to install all extensions (including external deps)
-pi install ./taropi-core \
-  && pi install ./taropi-draw \
-  && pi install npm:@juicesharp/rpiv-ask-user-question
+pi install ./
 ```
 
 Or manually add to `~/.pi/agent/settings.json`:
@@ -26,9 +34,7 @@ Or manually add to `~/.pi/agent/settings.json`:
 ```json
 {
   "packages": [
-    "/path/to/TaroPi/taropi-core",
-    "/path/to/TaroPi/taropi-draw",
-    "npm:@juicesharp/rpiv-ask-user-question"
+    "/path/to/TaroPi"
   ]
 }
 ```
@@ -41,11 +47,6 @@ Run `/reload` or restart pi after installation.
 |---------|-------------|
 | `taropi-core` | Core: subagent tools, permission control, Chinese response, web access, etc. |
 | `taropi-draw` | AI image generation: generate professional architecture diagrams (PNG) from sketches or descriptions |
-
-## External Dependencies
-
-| Package | Description |
-|---------|-------------|
-| [rpiv-ask-user-question](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question) | Ask user questions |
+| `taropi-plain` | Plain-text resources: append system prompt, subagent definitions, skills, and recommended configuration |
 
 
