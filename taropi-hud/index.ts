@@ -6,10 +6,8 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { readdirSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { homedir } from "node:os";
+import { promisify } from "node:util";
 import {
   rgb, c, dim,
   FG, COMMENT, PINK, GREEN, ORANGE, CYAN, PURPLE, YELLOW, BLUE,
@@ -17,14 +15,16 @@ import {
 } from "./theme.ts";
 import { HUD_EVENTS, HUD_PROTOCOL_VERSION, type HudPanelProvider, type HudRefreshRequest } from "./protocol.ts";
 import { HudPanelRegistry } from "./registry.ts";
+import { AgentSessionPresenceStore, groupAgentDirectories } from "./session-presence.ts";
 
 const execFileAsync = promisify(execFile);
 const panels = new HudPanelRegistry();
 const HUD_HOST_SLOT = Symbol.for("taropi-hud-host");
+const ASK_USER_BLOCKED_EVENT = "rpiv:ask-user:blocked";
 
-// ═══════════════════════════════════════════════════════════════
-// 类型定义
-// ═══════════════════════════════════════════════════════════════
+interface AskUserBlockedEvent {
+  active?: unknown;
+}
 
 interface GitStatus {
   branch: string;
@@ -37,43 +37,26 @@ interface GitStatus {
   untracked: number;
 }
 
-interface AgentRecord {
-  status: "running" | "completed";
-  startTime: number;
-  endTime?: number;
+interface UsageTotals {
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
-
-interface ToolRecord {
-  name: string;
-  target: string | null;
-  status: "running" | "completed" | "error";
-  startTime: number;
-  endTime?: number;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 会话状态（模块级，跨事件共享）
-// ═══════════════════════════════════════════════════════════════
 
 let sessionStartTime = 0;
 let turnIndex = 0;
-let tools: ToolRecord[] = [];
-let agents: AgentRecord[] = [];
 let modelProvider = "";
 let modelId = "";
 let cwd = "";
-
-// 会话累计 token 用量（来自每轮 turn_end 的 usage，用于计算缓存命中率）
+let agentRunActive = false;
+let waitingForUser = false;
+let presence: AgentSessionPresenceStore | undefined;
 let cumInputTokens = 0;
 let cumCacheReadTokens = 0;
 let cumCacheWriteTokens = 0;
-
-// 缓存最新的 ctx，供 HUD 重绘与子版块刷新使用
 let latestCtx: ExtensionContext | undefined;
-
-// ═══════════════════════════════════════════════════════════════
-// 图标（与 shannon-statusline 保持一致）
-// ═══════════════════════════════════════════════════════════════
+let hudRenderSuspended = false;
+let pendingHudResume: ReturnType<typeof setTimeout> | undefined;
 
 const I_MODEL = "λ";
 const I_PATH = "⌘";
@@ -82,15 +65,6 @@ const I_CLOCK = "✦";
 const I_CTX = "⊡";
 const I_TOK = "Σ";
 const I_HIT = "◎";
-const I_DONE = "✔";
-const I_RUN = "↻";
-const I_CLAUDE = "※";
-const I_MCP = "⊕";
-const I_SKILL = "★";
-
-// ═══════════════════════════════════════════════════════════════
-// Fish 风格路径缩写（移植自原版 shannon-statusline）
-// ═══════════════════════════════════════════════════════════════
 
 function abbreviateSegment(segment: string): string {
   if (segment.length <= 1) return segment;
@@ -116,9 +90,7 @@ export function shortenDisplayPath(fullPath: string, home: string, maxLen: numbe
   if (!fullPath) return "";
   let display = fullPath;
   if (home && fullPath === home) return "~";
-  if (home && fullPath.startsWith(home + "/")) {
-    display = "~" + fullPath.slice(home.length);
-  }
+  if (home && fullPath.startsWith(home + "/")) display = "~" + fullPath.slice(home.length);
 
   const prefix = display.startsWith("~") ? "~" : display.startsWith("/") ? "/" : "";
   const rawParts = display.split("/").filter(Boolean);
@@ -129,44 +101,35 @@ export function shortenDisplayPath(fullPath: string, home: string, maxLen: numbe
   const head = parts.slice(0, -1).map(abbreviateSegment);
   let shortened = [...head, ...tail].join("/");
   if (prefix) shortened = prefix + "/" + shortened;
-
   if (shortened.length <= maxLen) return shortened;
 
   const ellipsis = prefix + "/…/" + tail.join("/");
   if (ellipsis.length <= maxLen) return ellipsis;
-
   const budget = Math.max(1, maxLen - (prefix ? prefix.length + 4 : 3));
   return `${prefix ? prefix + "/" : ""}…/${truncateTailSegment(tail[0]!, budget)}`;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 上下文用量条
-// ═══════════════════════════════════════════════════════════════
-
 function ctxBar(percent: number, width: number): string {
-  const safeP = Math.min(100, Math.max(0, percent));
-  const filled = Math.round((safeP / 100) * width);
+  const safePercent = Math.min(100, Math.max(0, percent));
+  const filled = Math.round((safePercent / 100) * width);
   const empty = width - filled;
-
-  let r0: number, g0: number, b0: number;
-  let r1: number, g1: number, b1: number;
-  if (safeP >= 85) {
-    [r0, g0, b0] = [90, 0, 48];
-    [r1, g1, b1] = [255, 0, 144];
-  } else if (safeP >= 70) {
-    [r0, g0, b0] = [122, 21, 0];
-    [r1, g1, b1] = [255, 107, 0];
+  let start: [number, number, number];
+  let end: [number, number, number];
+  if (safePercent >= 85) {
+    start = [90, 0, 48];
+    end = [255, 0, 144];
+  } else if (safePercent >= 70) {
+    start = [122, 21, 0];
+    end = [255, 107, 0];
   } else {
-    [r0, g0, b0] = [0, 51, 0];
-    [r1, g1, b1] = [57, 255, 20];
+    start = [0, 51, 0];
+    end = [57, 255, 20];
   }
 
   const cells: string[] = [];
-  for (let i = 0; i < filled; i++) {
-    const t = filled > 1 ? i / (filled - 1) : 1;
-    cells.push(
-      `${rgb(Math.round(r0 + (r1 - r0) * t), Math.round(g0 + (g1 - g0) * t), Math.round(b0 + (b1 - b0) * t))}█`,
-    );
+  for (let index = 0; index < filled; index++) {
+    const ratio = filled > 1 ? index / (filled - 1) : 1;
+    cells.push(`${rgb(Math.round(start[0] + (end[0] - start[0]) * ratio), Math.round(start[1] + (end[1] - start[1]) * ratio), Math.round(start[2] + (end[2] - start[2]) * ratio))}█`);
   }
   return `${cells.join("")}${D}${"░".repeat(empty)}${R}`;
 }
@@ -177,161 +140,87 @@ function ctxPctColor(percent: number): string {
   return rgb(57, 255, 20);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 工具白名单 —— HUD 只展示 pi 原生工具
-// ═══════════════════════════════════════════════════════════════
-
-const TOOL_WHITELIST = new Set(["read", "write", "edit", "bash", "grep", "ls", "find"]);
-
-// ═══════════════════════════════════════════════════════════════
-// 格式化函数
-// ═══════════════════════════════════════════════════════════════
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return `${n}`;
+function fmtTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
+  return `${tokens}`;
 }
 
-function fmtDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(0)}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${Math.round(s % 60)}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+function fmtDuration(milliseconds: number): string {
+  if (milliseconds < 1000) return `${milliseconds}ms`;
+  const seconds = milliseconds / 1000;
+  if (seconds < 60) return `${seconds.toFixed(0)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Git 状态
-// ═══════════════════════════════════════════════════════════════
-
-async function getGit(dir: string): Promise<GitStatus | null> {
-  if (!dir) return null;
+async function getGit(directory: string): Promise<GitStatus | null> {
+  if (!directory) return null;
   try {
-    const { stdout: branchOut } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-      cwd: dir,
+    const { stdout: branchOutput } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: directory,
       timeout: 1500,
       encoding: "utf8",
     });
-    const branch = branchOut.trim();
+    const branch = branchOutput.trim();
     if (!branch) return null;
 
-    let isDirty = false,
-      modified = 0,
-      added = 0,
-      deleted = 0,
-      untracked = 0;
+    let isDirty = false;
+    let modified = 0;
+    let added = 0;
+    let deleted = 0;
+    let untracked = 0;
     try {
-      const { stdout: statusOut } = await execFileAsync("git", ["--no-optional-locks", "status", "--porcelain"], {
-        cwd: dir,
+      const { stdout: statusOutput } = await execFileAsync("git", ["--no-optional-locks", "status", "--porcelain"], {
+        cwd: directory,
         timeout: 1500,
         encoding: "utf8",
       });
-      const lines = statusOut.trim().split("\n").filter(Boolean);
-      isDirty = lines.length > 0;
-      for (const line of lines) {
+      const statusLines = statusOutput.trim().split("\n").filter(Boolean);
+      isDirty = statusLines.length > 0;
+      for (const line of statusLines) {
         if (line.startsWith("??")) untracked++;
         else if (line[0] === "A") added++;
         else if (line[0] === "D" || line[1] === "D") deleted++;
         else if (line[0] === "M" || line[1] === "M" || line[0] === "R" || line[0] === "C") modified++;
       }
     } catch {
-      /* 忽略 */
+      // Git 状态细节不可用时仍显示分支。
     }
 
-    let ahead = 0,
-      behind = 0;
+    let ahead = 0;
+    let behind = 0;
     try {
-      const { stdout: revOut } = await execFileAsync(
-        "git",
-        ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
-        { cwd: dir, timeout: 1500, encoding: "utf8" },
-      );
-      const parts = revOut.trim().split(/\s+/);
+      const { stdout: revisionOutput } = await execFileAsync("git", ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"], {
+        cwd: directory,
+        timeout: 1500,
+        encoding: "utf8",
+      });
+      const parts = revisionOutput.trim().split(/\s+/);
       if (parts.length === 2) {
-        behind = parseInt(parts[0]!, 10) || 0;
-        ahead = parseInt(parts[1]!, 10) || 0;
+        behind = Number.parseInt(parts[0]!, 10) || 0;
+        ahead = Number.parseInt(parts[1]!, 10) || 0;
       }
     } catch {
-      /* 没有 upstream */
+      // 没有 upstream 时不显示同步状态。
     }
-
     return { branch, isDirty, ahead, behind, modified, added, deleted, untracked };
   } catch {
     return null;
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 配置计数
-// ═══════════════════════════════════════════════════════════════
-
-function countConfigs(dir: string) {
-  let agentsMd = 0,
-    mcps = 0,
-    skills = 0,
-    extensions = 0;
+async function buildHud(ctx: ExtensionContext): Promise<string[]> {
+  const lines: string[] = [DIVIDER];
+  const parts: string[] = [];
   const home = homedir();
-  try {
-    // 项目内的 AGENTS.md / CLAUDE.md
-    if (existsSync(join(dir, "AGENTS.md"))) agentsMd++;
-    if (existsSync(join(dir, "CLAUDE.md"))) agentsMd++;
 
-    // 来自 pi 缓存的 MCP 数量
-    try {
-      const mcpCache = JSON.parse(readFileSync(join(home, ".pi", "agent", "mcp-cache.json"), "utf8"));
-      const servers = mcpCache?.servers;
-      if (servers && typeof servers === "object") mcps = Object.keys(servers).length;
-    } catch {
-      /* 忽略 */
-    }
-
-    // 来自 pi skills 目录的技能数量
-    const skillsDir = join(home, ".pi", "agent", "skills");
-    if (existsSync(skillsDir)) {
-      skills = readdirSync(skillsDir).filter((f) => !f.startsWith(".")).length;
-    }
-
-    // 来自 pi settings.json 的已安装扩展数量
-    try {
-      const settings = JSON.parse(readFileSync(join(home, ".pi", "agent", "settings.json"), "utf8"));
-      const packages: string[] = settings?.packages ?? [];
-      extensions = packages.length;
-    } catch {
-      /* 忽略 */
-    }
-  } catch {
-    /* 忽略 */
-  }
-  return { agentsMd, mcps, skills, extensions };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// HUD 渲染
-// ═══════════════════════════════════════════════════════════════
-
-async function buildHud(ctx: any): Promise<string[]> {
-  const lines: string[] = [];
-  const dir = cwd;
-  const sep = SEP;
-
-  // ── 顶部分隔线（与候选命令区分）──
-  lines.push(DIVIDER);
-
-  // ── 第一行：项目路径 + Git + 会话时长 ──
-  const parts1: string[] = [];
-  if (dir) {
-    const home = homedir();
-    parts1.push(`${c(I_PATH, ORANGE)} ${c(shortenDisplayPath(dir, home, 30), ORANGE)}`);
-  }
-
-  const git = await getGit(dir);
+  if (cwd) parts.push(`${c(I_PATH, ORANGE)} ${c(shortenDisplayPath(cwd, home, 30), ORANGE)}`);
+  const git = await getGit(cwd);
   if (git) {
-    const dirty = git.isDirty ? "*" : "";
-    const branchColor = CYAN;
-    let gitStr = `${c(I_BRANCH, branchColor)} ${c(`${git.branch}${dirty}`, branchColor)}`;
+    let gitText = `${c(I_BRANCH, CYAN)} ${c(`${git.branch}${git.isDirty ? "*" : ""}`, CYAN)}`;
     const details: string[] = [];
     if (git.ahead > 0) details.push(c(`↑${git.ahead}`, GREEN));
     if (git.behind > 0) details.push(c(`↓${git.behind}`, PINK));
@@ -339,97 +228,39 @@ async function buildHud(ctx: any): Promise<string[]> {
     if (git.added > 0) details.push(c(`+${git.added}`, GREEN));
     if (git.deleted > 0) details.push(c(`✘${git.deleted}`, PINK));
     if (git.untracked > 0) details.push(c(`?${git.untracked}`, COMMENT));
-    if (details.length > 0) gitStr += ` ${details.join(" ")}`;
-    parts1.push(gitStr);
+    if (details.length > 0) gitText += ` ${details.join(" ")}`;
+    parts.push(gitText);
   }
-
   if (sessionStartTime > 0) {
-    if (turnIndex > 0) parts1.push(`${c(`↺ loop`, PURPLE)} ${c(`×${turnIndex}`, FG)}`);
-    parts1.push(`${c(I_CLOCK, COMMENT)} ${c(fmtDuration(Date.now() - sessionStartTime), COMMENT)}`);
+    if (turnIndex > 0) parts.push(`${c("↺ loop", PURPLE)} ${c(`×${turnIndex}`, FG)}`);
+    parts.push(`${c(I_CLOCK, COMMENT)} ${c(fmtDuration(Date.now() - sessionStartTime), COMMENT)}`);
   }
+  parts.push(formatModel());
 
-  lines.push(parts1.join(` ${sep} `));
-
-  // ── 第二行：模型(provider/id) + 上下文用量 + token 用量 ──
-  const providerColor = COMMENT;
-  let modelStr: string;
-  if (modelProvider && modelId) {
-    modelStr = `${c(I_MODEL, BLUE)} ${c(modelProvider, providerColor)}${dim("/")}${c(modelId, BLUE)}`;
-  } else if (modelId) {
-    modelStr = `${c(I_MODEL, BLUE)} ${c(modelId, BLUE)}`;
-  } else if (modelProvider) {
-    modelStr = `${c(I_MODEL, BLUE)} ${c(modelProvider, BLUE)}`;
-  } else {
-    modelStr = `${c(I_MODEL, BLUE)} ${c("pi", BLUE)}`;
-  }
-
-  let ctxStr = "";
   try {
-    const usage = ctx.getContextUsage?.();
+    const usage = ctx.getContextUsage();
     if (usage) {
-      const pct = usage.percent ?? 0;
-      const bar = ctxBar(pct, 10);
-      const win = usage.contextWindow ?? 0;
-      const winLabel =
-        win >= 1_000_000 ? `${(win / 1_000_000).toFixed(1)}M` : win >= 1000 ? `${Math.round(win / 1000)}k` : "";
-      ctxStr = `${c(I_CTX, CYAN)} ${bar} ${c(`${pct.toFixed(1)}%`, ctxPctColor(pct))}`;
-      if (winLabel) ctxStr += ` ${dim(`(${winLabel})`)}`;
-
-      const totalTokens = usage.tokens ?? 0;
+      const percent = usage.percent ?? 0;
+      const contextWindow = usage.contextWindow ?? 0;
+      const windowLabel = contextWindow >= 1_000_000
+        ? `${(contextWindow / 1_000_000).toFixed(1)}M`
+        : contextWindow >= 1000 ? `${Math.round(contextWindow / 1000)}k` : "";
+      let contextText = `${c(I_CTX, CYAN)} ${ctxBar(percent, 10)} ${c(`${percent.toFixed(1)}%`, ctxPctColor(percent))}`;
+      if (windowLabel) contextText += ` ${dim(`(${windowLabel})`)}`;
+      parts.push(contextText);
       const cacheTotal = cumInputTokens + cumCacheReadTokens + cumCacheWriteTokens;
       const cacheHitRate = cacheTotal > 0 ? (cumCacheReadTokens / cacheTotal) * 100 : 0;
-      const tokStr =
-        `${c(I_TOK, CYAN)} ${c(fmtTokens(totalTokens), FG)} ` +
-        `${c(I_HIT, PURPLE)} ${c(`${cacheHitRate.toFixed(0)}%`, FG)}`;
-
-      const line2 = `${modelStr} ${sep} ${ctxStr} ${sep} ${tokStr}`;
-      lines.push(line2);
-    } else {
-      lines.push(modelStr);
+      parts.push(`${c(I_TOK, CYAN)} ${c(fmtTokens(usage.tokens ?? 0), FG)} ${c(I_HIT, PURPLE)} ${c(`${cacheHitRate.toFixed(0)}%`, FG)}`);
     }
   } catch {
-    lines.push(modelStr);
+    // 上下文用量暂不可用时保留其他基础信息。
   }
 
-  // ── 第三行：配置计数 ──
-  const configs = countConfigs(dir);
-  const cfgParts: string[] = [];
-  if (configs.agentsMd > 0) cfgParts.push(`${c(I_CLAUDE, BLUE)} ${c(`×${configs.agentsMd}`, BLUE)} ${dim("AGENTS.md")}`);
-  if (configs.mcps > 0) cfgParts.push(`${c(I_MCP, ORANGE)} ${c(`×${configs.mcps}`, ORANGE)} ${dim("MCPs")}`);
-  if (configs.skills > 0) cfgParts.push(`${c(I_SKILL, PURPLE)} ${c(`×${configs.skills}`, PURPLE)} ${dim("skills")}`);
-  if (cfgParts.length > 0) lines.push(cfgParts.join(` ${sep} `));
+  lines.push(parts.join(` ${SEP} `));
+  const directories = groupAgentDirectories(presence?.getRecords() ?? []);
+  lines.push(formatAgentStatusLine("idle", directories.idle));
+  lines.push(formatAgentStatusLine("working", directories.working));
 
-  // ── 分隔线 + 工具调用统计 ──
-  const completed = tools.filter((t) => t.status === "completed" && TOOL_WHITELIST.has(t.name));
-  const toolCounts = new Map<string, number>();
-  for (const t of completed) toolCounts.set(t.name, (toolCounts.get(t.name) ?? 0) + 1);
-
-  const toolLineParts: string[] = [];
-  for (const name of toolCounts.keys()) {
-    const count = toolCounts.get(name) ?? 0;
-    if (count > 0) toolLineParts.push(`${GREEN} ${c(name, FG)}${count > 1 ? ` ${c(`×${count}`, COMMENT)}` : ""}`);
-  }
-
-  // 右侧展示运行中的 sub-agent 数量
-  const activeAgents = agents.filter((a) => a.status === "running").length;
-  if (activeAgents > 0) {
-    toolLineParts.push(`${c(I_RUN, PURPLE)} ${c("agent", PURPLE)} ${c(`×${activeAgents}`, PURPLE)}`);
-  }
-
-  if (toolLineParts.length > 0) {
-    lines.push(DIVIDER);
-    lines.push(toolLineParts.join(` ${sep} `));
-  }
-
-  // ── 运行中的工具 ──
-  const running = tools.filter((t) => t.status === "running");
-  for (const t of running.slice(-2)) {
-    const elapsed = fmtDuration(Date.now() - t.startTime);
-    const target = t.target ? `: ${shortenDisplayPath(t.target, homedir(), 22)}` : "";
-    lines.push(`${c(I_RUN, YELLOW)} ${c(t.name, CYAN)}${target} ${c(`(${elapsed})`, COMMENT)}`);
-  }
-
-  // ── 插件注册的扩展面板 ──
   for (const panel of panels.get()) {
     try {
       const panelLines = panel.provider.render(panel.state, hudTheme, 67);
@@ -442,20 +273,60 @@ async function buildHud(ctx: any): Promise<string[]> {
       lines.push(`${c("!", PINK)} ${c(panel.provider.key, PINK)} ${dim("渲染失败")}`);
     }
   }
-
   return lines;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// HUD 刷新
-// ═══════════════════════════════════════════════════════════════
+function formatModel(): string {
+  if (modelProvider && modelId) return `${c(I_MODEL, BLUE)} ${c(modelProvider, COMMENT)}${dim("/")}${c(modelId, BLUE)}`;
+  if (modelId) return `${c(I_MODEL, BLUE)} ${c(modelId, BLUE)}`;
+  if (modelProvider) return `${c(I_MODEL, BLUE)} ${c(modelProvider, BLUE)}`;
+  return `${c(I_MODEL, BLUE)} ${c("pi", BLUE)}`;
+}
+
+function formatAgentStatusLine(status: "idle" | "working", directories: readonly string[]): string {
+  const color = status === "idle" ? GREEN : YELLOW;
+  const label = `${status} agent:`;
+  if (directories.length === 0) return `${c(label, color)} ${dim("—")}`;
+  const paths = directories.map((directory) => c(shortenDisplayPath(directory, homedir(), 60), FG));
+  return `${c(label, color)} ${paths.join(`${dim(", ")} `)}`;
+}
+
+function clearHud(ctx?: ExtensionContext): void {
+  const target = ctx ?? latestCtx;
+  if (target) target.ui.setWidget("taropi-hud", undefined, { placement: "belowEditor" });
+}
+
+function syncPresence(ctx?: ExtensionContext): void {
+  const target = ctx ?? latestCtx;
+  if (!target || target.mode !== "tui") return;
+  const status = waitingForUser || (!agentRunActive && target.isIdle()) ? "idle" : "working";
+  presence?.setStatus(status);
+}
+
+function suspendHudRendering(ctx?: ExtensionContext): void {
+  hudRenderSuspended = true;
+  if (pendingHudResume) clearTimeout(pendingHudResume);
+  pendingHudResume = undefined;
+  clearHud(ctx);
+}
+
+function scheduleHudResume(): void {
+  if (!hudRenderSuspended || pendingHudResume) return;
+  pendingHudResume = setTimeout(() => {
+    pendingHudResume = undefined;
+    hudRenderSuspended = false;
+    void refreshHud();
+  }, 0);
+  pendingHudResume.unref?.();
+}
 
 async function refreshHud(ctx?: ExtensionContext): Promise<void> {
+  if (hudRenderSuspended) return;
   const target = ctx ?? latestCtx;
-  if (!target) return;
+  if (!target || target.mode !== "tui") return;
   try {
     const lines = await buildHud(target);
-    if (lines.length > 0) target.ui.setWidget("taropi-hud", lines, { placement: "belowEditor" });
+    if (!hudRenderSuspended) target.ui.setWidget("taropi-hud", lines, { placement: "belowEditor" });
   } catch {
     // HUD 基础信息采集失败时保留上一次终端内容。
   }
@@ -467,18 +338,34 @@ async function refreshPanels(request: HudRefreshRequest, ctx?: ExtensionContext)
   if (!target) return registered.map((panel) => panel.provider.key);
   const results = await panels.refresh(request.key, target, request.reason);
   await refreshHud(target);
-  return results.flatMap((result, index) => (result.status === "rejected" ? [registered[index]?.provider.key ?? "unknown"] : []));
+  return results.flatMap((result, index) => result.status === "rejected" ? [registered[index]?.provider.key ?? "unknown"] : []);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 扩展入口
-// ═══════════════════════════════════════════════════════════════
+function updateUsageTotals(message: unknown): void {
+  const usage = getUsageTotals(message);
+  if (!usage) return;
+  cumInputTokens += usage.input ?? 0;
+  cumCacheReadTokens += usage.cacheRead ?? 0;
+  cumCacheWriteTokens += usage.cacheWrite ?? 0;
+}
+
+function getUsageTotals(message: unknown): UsageTotals | undefined {
+  if (typeof message !== "object" || message === null || !("usage" in message)) return undefined;
+  const usage = message.usage;
+  if (typeof usage !== "object" || usage === null) return undefined;
+  const usageRecord = usage as Record<string, unknown>;
+  const input = typeof usageRecord.input === "number" ? usageRecord.input : undefined;
+  const cacheRead = typeof usageRecord.cacheRead === "number" ? usageRecord.cacheRead : undefined;
+  const cacheWrite = typeof usageRecord.cacheWrite === "number" ? usageRecord.cacheWrite : undefined;
+  return { input, cacheRead, cacheWrite };
+}
 
 // registerHud 注册 HUD 宿主、基础状态看板和跨扩展刷新协议。
 export function registerHud(pi: ExtensionAPI): void {
   const hostFlags = globalThis as typeof globalThis & Record<symbol, boolean | undefined>;
   if (hostFlags[HUD_HOST_SLOT]) return;
   hostFlags[HUD_HOST_SLOT] = true;
+
   pi.events.on(HUD_EVENTS.register, (value: unknown) => {
     const registration = value as { version?: unknown; provider?: unknown } | undefined;
     const provider = registration?.provider as Partial<HudPanelProvider> | undefined;
@@ -492,9 +379,9 @@ export function registerHud(pi: ExtensionAPI): void {
     const request = value as { key?: unknown; provider?: unknown } | undefined;
     if (typeof request?.key !== "string" || !request.provider) return;
     panels.unregister(request.key, request.provider as HudPanelProvider);
-    refreshHud();
+    void refreshHud();
   });
-  pi.events.on(HUD_EVENTS.render, () => refreshHud());
+  pi.events.on(HUD_EVENTS.render, () => void refreshHud());
   pi.events.on(HUD_EVENTS.refresh, (value: unknown) => {
     const request = value as Partial<HudRefreshRequest> | undefined;
     if (!request || (request.key !== undefined && typeof request.key !== "string")) return;
@@ -517,102 +404,112 @@ export function registerHud(pi: ExtensionAPI): void {
     },
   });
 
+  pi.events.on(ASK_USER_BLOCKED_EVENT, (value: unknown) => {
+    const event = value as AskUserBlockedEvent | undefined;
+    if (event?.active === true) {
+      waitingForUser = true;
+      syncPresence();
+      suspendHudRendering();
+    } else if (event?.active === false) {
+      waitingForUser = false;
+      syncPresence();
+      scheduleHudResume();
+    }
+  });
   pi.events.emit(HUD_EVENTS.hostReady, { version: HUD_PROTOCOL_VERSION });
 
   pi.on("session_shutdown", (_event, ctx) => {
     panels.invalidate();
     latestCtx = undefined;
-    if (ctx.mode === "tui") ctx.ui.setWidget("taropi-hud", undefined, { placement: "belowEditor" });
+    const activePresence = presence;
+    presence = undefined;
+    void activePresence?.stop();
+    if (pendingHudResume) clearTimeout(pendingHudResume);
+    pendingHudResume = undefined;
+    hudRenderSuspended = false;
+    if (ctx.mode === "tui") clearHud(ctx);
     hostFlags[HUD_HOST_SLOT] = false;
   });
 
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
+    hudRenderSuspended = false;
+    if (pendingHudResume) clearTimeout(pendingHudResume);
+    pendingHudResume = undefined;
     sessionStartTime = Date.now();
     turnIndex = 0;
     cwd = ctx.cwd;
-    tools = [];
+    agentRunActive = false;
+    waitingForUser = false;
     cumInputTokens = 0;
     cumCacheReadTokens = 0;
     cumCacheWriteTokens = 0;
-    if (ctx.model) {
-      modelProvider = (ctx.model as any).provider ?? "";
-      modelId = (ctx.model as any).id ?? "";
+    modelProvider = ctx.model?.provider ?? "";
+    modelId = ctx.model?.id ?? "";
+    if (ctx.mode === "tui") {
+      const previousPresence = presence;
+      presence = new AgentSessionPresenceStore({ onChange: () => void refreshHud() });
+      void previousPresence?.stop();
+      presence.start(ctx.sessionManager.getSessionId(), ctx.cwd, "idle");
+      ctx.ui.setFooter(() => ({ invalidate() {}, render: () => [] }));
     }
-    // 隐藏原生 footer，避免与 HUD 信息重复
-    ctx.ui.setFooter(() => ({ invalidate() {}, render: () => [] }));
     void refreshPanels({ reason: "initial" }, ctx);
   });
 
   pi.on("model_select", (event, ctx) => {
     latestCtx = ctx;
-    if (event.model) {
-      modelProvider = (event.model as any).provider ?? "";
-      modelId = (event.model as any).id ?? "";
-    }
-    refreshHud(ctx);
+    modelProvider = event.model?.provider ?? "";
+    modelId = event.model?.id ?? "";
+    void refreshHud(ctx);
   });
-
   pi.on("turn_start", (event, ctx) => {
     latestCtx = ctx;
-    turnIndex = event.turnIndex ?? turnIndex + 1;
-    refreshHud(ctx);
+    turnIndex = event.turnIndex;
+    void refreshHud(ctx);
   });
-
-  pi.on("tool_call", (event, ctx) => {
-    latestCtx = ctx;
-    const tool: ToolRecord = { name: event.toolName, target: null, status: "running", startTime: Date.now() };
-    if (event.input && typeof event.input === "object") {
-      const inp = event.input as Record<string, unknown>;
-      if (typeof inp.path === "string") tool.target = inp.path;
-      else if (typeof inp.filePath === "string") tool.target = inp.filePath;
-    }
-    tools.push(tool);
-    // 长会话下限制上限为 500，防止无限增长
-    if (tools.length > 500) tools = tools.slice(-400);
-    refreshHud(ctx);
-  });
-
-  pi.on("tool_result", (event, ctx) => {
-    latestCtx = ctx;
-    for (let i = tools.length - 1; i >= 0; i--) {
-      if (tools[i]!.name === event.toolName && tools[i]!.status === "running") {
-        tools[i]!.status = event.isError ? "error" : "completed";
-        tools[i]!.endTime = Date.now();
-        break;
-      }
-    }
-    refreshHud(ctx);
-  });
-
   pi.on("turn_end", (event, ctx) => {
     latestCtx = ctx;
-    // 累计本轮的 token 用量（仅当 message 为带 usage 的 assistant 消息时）
-    const msg = event.message as any;
-    const usage = msg?.usage;
-    if (usage) {
-      cumInputTokens += usage.input ?? 0;
-      cumCacheReadTokens += usage.cacheRead ?? 0;
-      cumCacheWriteTokens += usage.cacheWrite ?? 0;
-    }
-    refreshHud(ctx);
+    updateUsageTotals(event.message);
+    void refreshHud(ctx);
   });
-
   pi.on("agent_start", (_event, ctx) => {
     latestCtx = ctx;
-    agents.push({ status: "running", startTime: Date.now() });
-    refreshHud(ctx);
+    agentRunActive = true;
+    syncPresence(ctx);
+    void refreshHud(ctx);
   });
-
-  pi.on("agent_end", (_event, ctx) => {
+  pi.on("agent_settled", (_event, ctx) => {
     latestCtx = ctx;
-    // 将最早开始的运行中 agent 标记为完成
-    const running = agents.find((a) => a.status === "running");
-    if (running) {
-      running.status = "completed";
-      running.endTime = Date.now();
-    }
-    refreshHud(ctx);
+    agentRunActive = false;
+    syncPresence(ctx);
+    void refreshHud(ctx);
+  });
+  pi.on("session_before_compact", (_event, ctx) => {
+    latestCtx = ctx;
+    agentRunActive = true;
+    syncPresence(ctx);
+  });
+  pi.on("session_compact", (_event, ctx) => {
+    latestCtx = ctx;
+    agentRunActive = false;
+    syncPresence(ctx);
+    void refreshHud(ctx);
+  });
+  pi.on("session_compact_failed", (_event, ctx) => {
+    latestCtx = ctx;
+    agentRunActive = false;
+    syncPresence(ctx);
+    void refreshHud(ctx);
+  });
+  pi.on("ui_prompt_start", (_event, ctx) => {
+    latestCtx = ctx;
+    waitingForUser = true;
+    syncPresence(ctx);
+  });
+  pi.on("ui_prompt_end", (_event, ctx) => {
+    latestCtx = ctx;
+    waitingForUser = false;
+    syncPresence(ctx);
   });
 }
 
