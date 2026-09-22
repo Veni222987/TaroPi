@@ -11,9 +11,7 @@ import { showPlanDecision } from "./tui.ts";
 const PLANNER_MODEL_NAME = "Aurum";
 const PERSIST_ENTRY_TYPE = "plan-workflow";
 const CONTEXT_TYPE = "plan-workflow-context";
-const PLANNING_TOOLS = ["read", "bash", "grep", "find", "ls"];
-const DISABLED_PLAN_TOOLS = new Set(["edit", "write", "subagent"]);
-const SUBAGENT_TOOL = "subagent";
+const DISABLED_PLAN_TOOLS = new Set(["edit", "write"]);
 
 type WorkflowPhase = "idle" | "planning" | "clarifying" | "implementing";
 
@@ -99,14 +97,12 @@ function createRuntime(pi: ExtensionAPI) {
 		}
 
 		const available = new Set(pi.getAllTools().map((tool) => tool.name));
-		pi.setActiveTools(
-			[...new Set([...(originalTools ?? []).filter((tool) => !DISABLED_PLAN_TOOLS.has(tool)), ...PLANNING_TOOLS])].filter((tool) => available.has(tool)),
-		);
+		pi.setActiveTools((originalTools ?? []).filter((tool) => !DISABLED_PLAN_TOOLS.has(tool) && available.has(tool)));
 	}
 
 	async function enterImplementation(): Promise<void> {
 		if (originalModel) await pi.setModel(originalModel);
-		pi.setActiveTools((originalTools ?? pi.getActiveTools()).filter((tool) => tool !== SUBAGENT_TOOL));
+		pi.setActiveTools(originalTools ?? pi.getActiveTools());
 	}
 
 	async function restore(): Promise<void> {
@@ -158,14 +154,6 @@ function registerPlanHud(hud: HudClient, getState: () => WorkflowState): void {
 			return [`${theme.c("🧭", theme.YELLOW)} ${theme.c("plan", theme.YELLOW)} ${theme.c(phase, theme.FG)} ${theme.dim(`调整 ${state.adjustmentRounds} 轮`)}`];
 		},
 	});
-}
-
-function isMutatingCommand(command: string): boolean {
-	return [
-		/>/, />>/, /(?:^|[;&|])\s*(?:tee|mkdir|touch|rm|mv|cp|dd|chmod|chown|ln)\s/,
-		/\bsed\s+-i\b/, /(?:^|[;&|])\s*(?:npm\s+(?:i|install|init)|yarn\s+(?:add|init)|pnpm\s+(?:add|install)|pip\d*\s+install)\b/,
-		/(?:^|[;&|])\s*git\s+(?:add|commit|stash\s+(?:push|pop|apply|drop|branch)|merge\s|rebase\s|cherry-pick|checkout|switch|branch\s+-[dD])\b/,
-	].some((pattern) => pattern.test(command.trim()));
 }
 
 // registerPlan 注册 /plan 三阶段状态机。
@@ -284,17 +272,6 @@ export default function registerPlan(pi: ExtensionAPI): void {
 			return;
 		}
 		ctx.ui.notify(`计划制定阶段已锁定模型为 ${PLANNER_MODEL_NAME}，请完成计划后再切换。`, "warning");
-	});
-
-	pi.on("tool_call", async (event, ctx) => {
-		if (event.toolName === SUBAGENT_TOOL && state.phase !== "idle") {
-			return { block: true, reason: "当前计划阶段不可用此工具。" };
-		}
-		if (state.phase !== "planning" || event.toolName !== "bash") return;
-		const command = (event.input as { command?: string }).command ?? "";
-		if (!isMutatingCommand(command)) return;
-		ctx.ui.notify(`⛔ 计划阶段禁止写操作: ${command.slice(0, 40)}`, "warning");
-		return { block: true, reason: "计划制定阶段只允许读取和分析代码，禁止写入文件或安装依赖。" };
 	});
 
 	pi.on("agent_start", async () => {

@@ -19,11 +19,13 @@
    - JSON 配置：解析源、目标为对象。目标不存在时按源内容创建；目标存在时保留仅存在于目标的字段，并用推荐配置覆盖同名的标量/对象字段。输出使用 2 空格缩进和末尾换行。
    - permissions.json：除保留目标其他字段外，推荐的 externalWriteConfirm 取源值；deny 必须按原有顺序保留目标规则，并仅追加源中尚不存在的规则。规则以完整 JSON 结构深度相等判重，不能因为相同 pattern 就删除用户携带的不同 tool 或 reason。
    - keybindings.json 与 web-search.json：保留目标中推荐文件未声明的键；推荐文件声明的键以源值为准。只有实际内容变化时才写入。
-   - APPEND_SYSTEM.md 等 Markdown/纯文本追加配置：目标不存在时创建。目标已存在时，按二级标题分段比较；完全一致的段落跳过，目标没有的推荐段落才追加。若同名段落内容不同，不要静默覆盖用户内容，报告冲突并等待确认。
+   - APPEND_SYSTEM.md 等可追加的 Markdown/纯文本配置：目标不存在时创建。目标已存在时，按二级标题分段比较；完全一致的段落跳过，目标没有的推荐段落才追加。若同名段落内容不同，不要静默覆盖用户内容，报告冲突并等待确认。
+   - PREAMBLE.md：这是 TaroPi 的角色文本配置。目标不存在时创建；目标已存在且内容相同则跳过；内容不同时不得按段落合并或覆盖，先备份目标文件并请求用户确认。
 5. 不修改 taropi-plain/recommend/ 下的源文件，不修改 README 映射表，也不要顺带处理表格之外的配置（例如 models.json），除非用户另行明确要求。
 6. 完成后逐项报告：源路径、目标路径、结果（新建 / 合并更新 / 无变化 / 需用户确认）、保留了哪些用户配置；最后提醒用户在 Pi 中执行 /reload 或重启以加载配置。
 
 当前表格中的常见映射包括：
+- taropi-plain/PREAMBLE.md → ~/.pi/agent/PREAMBLE.md
 - taropi-plain/APPEND_SYSTEM.md → ~/.pi/agent/APPEND_SYSTEM.md
 - taropi-plain/recommend/permissions.json → ~/.pi/agent/permissions.json
 - taropi-plain/recommend/web-search.json → ~/.pi/agent/web-search.json
@@ -32,14 +34,33 @@
 
 | 文件 | 复制到 | 说明 |
 |------|--------|------|
+| `taropi-plain/PREAMBLE.md` | `~/.pi/agent/PREAMBLE.md` | TaroPi 的全局前导角色文本；由 `taropi-core` 读取，只替换角色开头，Pi 继续动态生成工具摘要、规则、skills 与项目上下文 |
 | `taropi-plain/APPEND_SYSTEM.md` | `~/.pi/agent/APPEND_SYSTEM.md` | 追加中文表达、工作方式和工具调用规则，同时保留 Pi 默认的工具、skills 与项目上下文注入 |
 | `taropi-plain/recommend/permissions.json` | `~/.pi/agent/permissions.json` | taropi-permissions 权限规则；插件启动时自动读取并与默认规则合并 |
 | `taropi-plain/recommend/web-search.json` | `~/.pi/agent/web-search.json` | taropi-core 网络访问模块（`web-access/`）的默认配置：`workflow: "none"` 表示搜索直接返回结果，不额外调用模型生成摘要 |
 | `taropi-plain/recommend/keybindings.json` | `~/.pi/agent/keybindings.json` | 将中断从 `Esc` 改为 `Ctrl+C`（更符合终端习惯），`Esc` 改为清空编辑器；复制后 `/reload` 生效 |
 
+## 全局角色文本（PREAMBLE.md）
+
+`PREAMBLE.md` 是 TaroPi 的扩展配置，由已安装的 `taropi-core` 读取；它不是 Pi 原生的完整系统提示词机制。文件只替换系统提示词前导角色，Pi 会继续按实际启用工具动态生成工具摘要和工具规则，并自动组装 Pi 文档指引、skills、项目上下文、当前工作目录和 `APPEND_SYSTEM.md`。
+
+推荐模板在 `taropi-plain/PREAMBLE.md`。在仓库根目录执行以下命令安装；已有文件先备份，便于恢复：
+
+```bash
+mkdir -p ~/.pi/agent
+if test -e ~/.pi/agent/PREAMBLE.md; then
+  cp ~/.pi/agent/PREAMBLE.md ~/.pi/agent/PREAMBLE.md.backup
+fi
+cp taropi-plain/PREAMBLE.md ~/.pi/agent/PREAMBLE.md
+```
+
+路径跟随 `PI_CODING_AGENT_DIR`，未设置时为 `~/.pi/agent/`。文件名必须保持全大写。复制后重启 Pi 或执行 `/reload`；删除、移走或清空该文件后再 `/reload`，即可恢复 Pi 的默认角色文本。
+
+受信任项目的 `.pi/SYSTEM.md`、全局 `SYSTEM.md`、`--system-prompt` 及其他扩展的强制完整提示词优先于 PREAMBLE。存在完整覆盖时，`taropi-core` 会跳过替换，避免改变子 Agent 等专用角色。
+
 ## 追加系统提示词（APPEND_SYSTEM.md）
 
-`APPEND_SYSTEM.md` 是 Pi 的追加系统提示词机制：它在默认系统提示词后附加规则，不会像 `SYSTEM.md` 那样替换默认的工具摘要、工具 Guidelines、skills 和项目上下文。
+`APPEND_SYSTEM.md` 是 Pi 的追加系统提示词机制：它在当前系统提示词后附加规则。单独使用时会保留 Pi 默认的工具摘要、工具 Guidelines、skills 和项目上下文；与 PREAMBLE 同时配置时，角色文本由 TaroPi 替换，追加规则、skills 和项目上下文仍由 Pi 自动组装。
 
 在仓库根目录执行：
 
