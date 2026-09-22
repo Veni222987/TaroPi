@@ -285,7 +285,7 @@ function formatModel(): string {
 
 function formatAgentStatusLine(status: "idle" | "working", directories: readonly string[]): string {
   const color = status === "idle" ? GREEN : YELLOW;
-  const label = `${status} agent:`;
+  const label = `${status}:`;
   if (directories.length === 0) return `${c(label, color)} ${dim("—")}`;
   const paths = directories.map((directory) => c(shortenDisplayPath(directory, homedir(), 60), FG));
   return `${c(label, color)} ${paths.join(`${dim(", ")} `)}`;
