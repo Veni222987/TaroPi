@@ -113,10 +113,9 @@ export class ModelPickerPage {
     const q = this.filter.toLowerCase();
     if (!q) return this.choices;
     return this.choices.filter(
-      (c) =>
-        c.id.toLowerCase().includes(q) ||
-        c.name.toLowerCase().includes(q) ||
-        c.provider.toLowerCase().includes(q),
+      (choice) =>
+        choice.providerModelId.toLowerCase().includes(q) ||
+        choice.name.toLowerCase().includes(q),
     );
   }
 
@@ -169,13 +168,13 @@ export class ModelPickerPage {
       return this.cachedLines;
     }
 
-    const w = Math.min(width, 64);
+    const w = Math.min(width, 80);
     const lines: string[] = [];
     const border = "─".repeat(w - 2);
     const tierLabel = TIER_LABEL[this.tier];
 
     lines.push(`┌${border}┐`);
-    lines.push(`│ ${truncateToWidth(`${tierLabel} — 选择模型`, w - 4, "...", true)} │`);
+    lines.push(`│ ${truncateToWidth(`${tierLabel} — 选择模型（provider/model-id）`, w - 4, "...", true)} │`);
     lines.push(`│ ${truncateToWidth(`搜索: ${this.filter || "(输入关键词过滤)"}`, w - 4, "...", true)} │`);
     lines.push(`├${border}┤`);
 
@@ -189,7 +188,7 @@ export class ModelPickerPage {
       for (let i = start; i < end; i++) {
         const choice = this.filtered[i]!;
         const prefix = i === this.selected ? "▶" : " ";
-        const itemText = `${prefix} ${choice.label}`;
+        const itemText = `${prefix} ${choice.providerModelId}`;
         lines.push(`│ ${truncateToWidth(itemText, w - 4, "...", true)} │`);
       }
     }

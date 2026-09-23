@@ -24,11 +24,15 @@ export interface AliasConfig {
   Cu?: string;
 }
 
-/** 模型选择项 (渲染用) */
+/** provider/model-id 解析结果 */
+export interface ProviderModelId {
+  provider: string;
+  modelId: string;
+}
+
+/** 模型选择项（渲染用） */
 export interface ModelChoice {
-  /** 展示标签：provider/id  name */
-  label: string;
-  /** provider/id 格式 */
+  /** provider/model-id 格式 */
   providerModelId: string;
   /** 模型原始 id */
   id: string;
@@ -38,13 +42,51 @@ export interface ModelChoice {
   provider: string;
 }
 
-/** 从 Model 列表转换为 ModelChoice 列表 */
+// parseProviderModelId 解析严格的 provider/model-id 格式。
+export function parseProviderModelId(raw: string): ProviderModelId | undefined {
+  const parts = raw.split("/");
+  if (parts.length !== 2) return undefined;
+
+  const [provider, modelId] = parts;
+  if (
+    !provider ||
+    !modelId ||
+    /\s/.test(provider) ||
+    /\s/.test(modelId)
+  ) {
+    return undefined;
+  }
+
+  return { provider, modelId };
+}
+
+// findModelByProviderModelId 按 provider/model-id 精确查找模型。
+export function findModelByProviderModelId<T extends { provider: string; id: string }>(
+  models: readonly T[],
+  providerModelId: string,
+): T | undefined {
+  const parsed = parseProviderModelId(providerModelId);
+  if (!parsed) return undefined;
+
+  const provider = parsed.provider.toLowerCase();
+  const modelId = parsed.modelId.toLowerCase();
+  return models.find(
+    (model) => model.provider.toLowerCase() === provider && model.id.toLowerCase() === modelId,
+  );
+}
+
+// findModelsById 查找指定 model-id 的全部 provider 模型。
+export function findModelsById<T extends { id: string }>(models: readonly T[], id: string): T[] {
+  const normalizedId = id.toLowerCase();
+  return models.filter((model) => model.id.toLowerCase() === normalizedId);
+}
+
+// modelsToChoices 将 Model 列表转换为供模型选择页渲染的选项。
 export function modelsToChoices(models: Model<any>[]): ModelChoice[] {
-  return models.map((m) => ({
-    label: `${m.id}  ${m.name !== m.id ? m.name : ""}`,
-    providerModelId: `${m.provider}/${m.id}`,
-    id: m.id,
-    name: m.name,
-    provider: m.provider,
+  return models.map((model) => ({
+    providerModelId: `${model.provider}/${model.id}`,
+    id: model.id,
+    name: model.name,
+    provider: model.provider,
   }));
 }
