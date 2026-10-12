@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { resolve, relative, dirname } from "node:path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { resolve, relative } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
 // ── 配置类型 ──────────────────────────────────────────────
@@ -59,37 +59,35 @@ const DEFAULT_CONFIG: PermissionsConfig = {
 
 const CONFIG_PATH = resolve(homedir(), ".pi", "agent", "permissions.json");
 
-function deepMerge<T extends Record<string, any>>(base: T, overrides: Partial<T>): T {
-  const result = { ...base };
-  for (const key of Object.keys(overrides) as (keyof T)[]) {
-    const v = overrides[key];
-    if (v && typeof v === "object" && !Array.isArray(v)) {
-      (result as any)[key] = deepMerge((base as any)[key], v);
-    } else {
-      (result as any)[key] = v;
-    }
-  }
-  return result;
-}
+export function loadConfig(configPath = CONFIG_PATH): PermissionsConfig {
+  if (!existsSync(configPath)) return structuredClone(DEFAULT_CONFIG);
 
-function loadConfig(): PermissionsConfig {
-  let merged = DEFAULT_CONFIG;
-  try {
-    if (existsSync(CONFIG_PATH)) {
-      const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-      merged = deepMerge(DEFAULT_CONFIG, raw);
-    }
-  } catch {
-    // 配置损坏，降级到默认
+  const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`权限配置必须是 JSON 对象: ${configPath}`);
   }
-  // 始终写回，确保新增默认规则自动注入磁盘配置
-  try {
-    mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-    writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), "utf-8");
-  } catch {
-    // 写入失败，静默降级
+  if (raw.externalWriteConfirm !== undefined && typeof raw.externalWriteConfirm !== "boolean") {
+    throw new Error(`externalWriteConfirm 必须是布尔值: ${configPath}`);
   }
-  return merged;
+  if (raw.deny !== undefined && (!Array.isArray(raw.deny) || !raw.deny.every((entry: unknown) => {
+    if (typeof entry === "string") return true;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const rule = entry as DenyRule;
+    const tools: ToolName[] = ["read", "write", "edit", "bash", "grep", "find", "ls"];
+    return typeof rule.pattern === "string"
+      && (rule.reason === undefined || typeof rule.reason === "string")
+      && (rule.tool === undefined || (Array.isArray(rule.tool)
+        ? rule.tool.every((tool) => tools.includes(tool))
+        : tools.includes(rule.tool)));
+  }))) {
+    throw new Error(`deny 必须是有效的权限规则数组: ${configPath}`);
+  }
+
+  // 已有配置是唯一来源；缺省字段不恢复默认限制，加载不修改磁盘文件。
+  return {
+    externalWriteConfirm: raw.externalWriteConfirm ?? false,
+    deny: raw.deny ?? [],
+  };
 }
 
 // ── 规则匹配 ──────────────────────────────────────────────
