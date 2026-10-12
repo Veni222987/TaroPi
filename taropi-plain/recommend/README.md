@@ -17,7 +17,7 @@
 3. 目标父目录不存在时才创建。源文件不存在、目标 JSON 格式非法或无法安全判断合并语义时，不要覆盖目标文件：说明原因并请求用户决定。
 4. 按文件类型增量处理：
    - JSON 配置：解析源、目标为对象。目标不存在时按源内容创建；目标存在时保留仅存在于目标的字段，并用推荐配置覆盖同名的标量/对象字段。输出使用 2 空格缩进和末尾换行。
-   - permissions.json：除保留目标其他字段外，推荐的 externalWriteConfirm 取源值；deny 必须按原有顺序保留目标规则，并仅追加源中尚不存在的规则。规则以完整 JSON 结构深度相等判重，不能因为相同 pattern 就删除用户携带的不同 tool 或 reason。
+   - permissions.json：目标不存在时按源内容创建；目标已存在时以用户配置为准，不覆盖 externalWriteConfirm，不追加任何推荐 deny 规则，不补回用户已删除的字段。若与源内容不同，只报告差异；仅在用户明确确认具体权限变更后才写入。此规则优先于通用 JSON 合并规则。
    - keybindings.json 与 web-search.json：保留目标中推荐文件未声明的键；推荐文件声明的键以源值为准。只有实际内容变化时才写入。
    - APPEND_SYSTEM.md 等可追加的 Markdown/纯文本配置：目标不存在时创建。目标已存在时，按二级标题分段比较；完全一致的段落跳过，目标没有的推荐段落才追加。若同名段落内容不同，不要静默覆盖用户内容，报告冲突并等待确认。
    - PREAMBLE.md：这是 TaroPi 的角色文本配置。目标不存在时创建；目标已存在且内容相同则跳过；内容不同时不得按段落合并或覆盖，先备份目标文件并请求用户确认。
@@ -36,7 +36,7 @@
 |------|--------|------|
 | `taropi-plain/PREAMBLE.md` | `~/.pi/agent/PREAMBLE.md` | TaroPi 的全局前导角色文本；由 `taropi-core` 读取，只替换角色开头，Pi 继续动态生成工具摘要、规则、skills 与项目上下文 |
 | `taropi-plain/APPEND_SYSTEM.md` | `~/.pi/agent/APPEND_SYSTEM.md` | 追加中文表达、工作方式和工具调用规则，同时保留 Pi 默认的工具、skills 与项目上下文注入 |
-| `taropi-plain/recommend/permissions.json` | `~/.pi/agent/permissions.json` | taropi-permissions 权限规则；插件启动时自动读取并与默认规则合并 |
+| `taropi-plain/recommend/permissions.json` | `~/.pi/agent/permissions.json` | taropi-permissions 权限规则；已有配置独立生效，不合并默认规则、不自动写回；同步不得未经确认改变已有权限 |
 | `taropi-plain/recommend/web-search.json` | `~/.pi/agent/web-search.json` | taropi-core 网络访问模块（`web-access/`）的默认配置：`workflow: "none"` 表示搜索直接返回结果，不额外调用模型生成摘要 |
 | `taropi-plain/recommend/keybindings.json` | `~/.pi/agent/keybindings.json` | 将中断从 `Esc` 改为 `Ctrl+C`（更符合终端习惯），`Esc` 改为清空编辑器；复制后 `/reload` 生效 |
 
