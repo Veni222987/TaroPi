@@ -8,7 +8,6 @@ const ADJUST_PLAN_LABEL = "补充内容";
 export interface PlanDecision {
 	execute: boolean;
 	feedback?: string;
-	cancelled?: boolean;
 }
 
 export interface PlanReview {
@@ -35,7 +34,7 @@ export class PlanDecisionPage {
 
 	handleInput(data: string): void {
 		if (matchesKey(data, Key.escape)) {
-			this.onDecide({ execute: false, cancelled: true });
+			this.onDecide({ execute: false });
 			return;
 		}
 		if (matchesKey(data, Key.up)) {
@@ -89,13 +88,6 @@ export class PlanDecisionPage {
 // showPlanDecision 写入固定位置的计划文件，并显示计划确认组件。
 export async function showPlanDecision(ctx: ExtensionContext, planText: string, file?: PlanFile): Promise<PlanReview> {
 	const savedFile = savePlanFile(ctx.cwd, planText, file);
-	if (ctx.mode !== "tui") {
-		const choice = await ctx.ui.select("计划已生成，如何继续？", [EXECUTE_PLAN_LABEL, ADJUST_PLAN_LABEL]);
-		if (!choice) return { decision: { execute: false, cancelled: true }, file: savedFile };
-		if (choice === EXECUTE_PLAN_LABEL) return { decision: { execute: true }, file: savedFile };
-		const feedback = await ctx.ui.input("补充内容");
-		return { decision: { execute: false, feedback, cancelled: feedback === undefined }, file: savedFile };
-	}
 	const decision = await ctx.ui.custom<PlanDecision>(
 		(_tui, theme, _keybindings, done) => new PlanDecisionPage(theme, done, savedFile?.path),
 		{ overlay: true, overlayOptions: { anchor: "bottom-center", width: "100%", margin: { left: 0, right: 0, bottom: 0 } } },
