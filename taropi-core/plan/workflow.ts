@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InputEvent, InputEventResult } from "@earendil-works/pi-coding-agent";
 import { loadPlanConfig } from "./config.ts";
-import { createPlanFile, findActivePlan, hasPlanSteps, savePlanFile } from "./file.ts";
+import { createPlanFile, findActivePlan, hasPlanSteps, publishPlanFile, savePlanFile } from "./file.ts";
 import { phaseMessage } from "./prompts.ts";
 import { switchPlanModel } from "./runtime.ts";
+import { generatePlanTitle } from "./title.ts";
 import { showPlanDecision } from "./tui.ts";
 import type { PlanConfig, PlanRequest, PlanResult, PlanStatus, WorkflowState } from "./types.ts";
 
@@ -15,6 +16,7 @@ export class PlanWorkflow {
 	private launchCancelled = false;
 	private launching = false;
 	private launchMessage: string | undefined;
+	private entering: AbortController | undefined;
 
 	constructor(private readonly pi: ExtensionAPI, private readonly render: () => void) {}
 
@@ -35,32 +37,53 @@ export class PlanWorkflow {
 	// invalidate 使会话退出、切换或新输入前的异步回调失效，磁盘检查点不清空。
 	invalidate(): void {
 		this.generation++;
+		this.entering?.abort();
+		this.entering = undefined;
 		this.autoLaunch = false;
 		this.launching = false;
 		this.launchMessage = undefined;
 	}
 
-	// enter 仅供用户 /plan 命令调用，先锁定阶段以防并发命令重复进入。
+	// enter 仅供用户 /plan 调用，标题生成与首次排他创建成功后才进入 planning。
 	async enter(task: string, ctx: ExtensionCommandContext): Promise<void> {
 		if (!task.trim()) { ctx.ui.notify("用法: /plan 任务描述", "info"); return; }
+		if (this.entering) { ctx.ui.notify("正在创建 plan，请等待或取消创建", "warning"); return; }
 		if (this.state.phase !== "idle") { ctx.ui.notify("已有活动 plan，可输入补充继续或说“退出 plan”", "warning"); return; }
 		const generation = this.generation;
-		await ctx.waitForIdle();
-		if (generation !== this.generation || this.state.phase !== "idle") return;
-		this.config = loadPlanConfig();
-		this.state = { ...idleState(), phase: "planning", task: task.trim(),
-			planFile: createPlanFile(ctx.cwd, ctx.sessionManager.getSessionId(), task.trim()) };
-		this.save(ctx);
-		await switchPlanModel(this.pi, ctx, this.config.planning.model);
-		if (generation !== this.generation) return;
-		this.pi.sendUserMessage(phaseMessage(this.state, this.config), { deliverAs: "followUp" });
+		const controller = new AbortController();
+		this.entering = controller;
+		try {
+			await ctx.waitForIdle();
+			if (generation !== this.generation || controller.signal.aborted) return;
+			this.config = loadPlanConfig();
+			const title = await generatePlanTitle(task.trim(), ctx, this.config.planning.model, controller.signal);
+			if (generation !== this.generation || controller.signal.aborted) return;
+			if (!title) { ctx.ui.notify("计划创建已取消，仍为非 plan 状态", "info"); return; }
+			const file = createPlanFile(ctx.cwd, ctx.sessionManager.getSessionId(), task.trim(), new Date(), title);
+			const published = publishPlanFile(file);
+			if (published !== "created") {
+				ctx.ui.notify(published === "exists" ? "同一分钟同名计划已存在，请更换任务名称或下一分钟重试"
+					: "计划文件创建失败，未进入 plan；请检查目录权限及文件系统是否支持排他发布", "warning");
+				return;
+			}
+			this.state = { ...idleState(), phase: "planning", task: task.trim(), planFile: file };
+			this.entering = undefined;
+			this.render();
+			await switchPlanModel(this.pi, ctx, this.config.planning.model);
+			if (generation !== this.generation) return;
+			this.pi.sendUserMessage(phaseMessage(this.state, this.config), { deliverAs: "followUp" });
+		} catch (error) {
+			if (generation === this.generation && !controller.signal.aborted) ctx.ui.notify(`计划创建未完成：${String(error)}`, "warning");
+		} finally {
+			if (this.entering === controller) this.entering = undefined;
+		}
 	}
 
 	// dispatch 执行模型请求的合法流转，确认必须来自 UI，终态保留历史 Markdown。
 	async dispatch(request: PlanRequest, ctx: ExtensionContext, signal?: AbortSignal): Promise<PlanResult> {
 		if (request.action === "status") return { text: phaseMessage(this.state, this.config) };
 		if (this.state.phase === "idle") throw new Error("只有用户执行 /plan 才能进入计划流程");
-		if (signal?.aborted) throw new Error("计划操作已取消，检查点保持不变");
+		if (signal?.aborted) return { text: "计划操作已取消，检查点保持不变；等待用户输入。", terminate: true };
 		if (request.action === "submit") return this.submit(request.text ?? "", ctx, signal);
 		if (request.action === "complete" && (this.state.phase !== "implementing" || this.state.pendingLaunch)) {
 			throw new Error("只有已启动的实施阶段可以完成");
@@ -116,6 +139,7 @@ export class PlanWorkflow {
 
 	// input 仅在待启动检查点补发一次实施提示；普通输入不改写或追加规则。
 	async input(event: InputEvent, ctx: ExtensionContext): Promise<InputEventResult | undefined> {
+		if (this.entering && event.source !== "extension") this.invalidate();
 		if (!this.state.pendingLaunch) return undefined;
 		if (event.source === "extension" && event.text === this.launchMessage) {
 			this.state.pendingLaunch = false;
@@ -142,19 +166,26 @@ export class PlanWorkflow {
 		this.state.planText = text.trim();
 		this.save(ctx);
 		const generation = this.generation;
-		const decision = await showPlanDecision(ctx, text, this.state.planFile, signal);
-		if (generation !== this.generation || signal?.aborted) throw new Error("确认已取消或会话已切换，检查点保持不变");
-		if (decision.execute) {
+		const decision = await showPlanDecision(ctx, this.state.planFile, signal);
+		if (generation !== this.generation) return { text: "确认已失效，原检查点保持不变；不处理旧会话决策。", terminate: true };
+		if (!signal?.aborted && decision === "execute") {
 			this.state.phase = "implementing";
 			this.state.pendingLaunch = true;
 			this.autoLaunch = true;
 			this.save(ctx);
 			return { text: "用户已确认。等待本轮结束后压缩上下文、切换实施模型并下发实施规则；不要提前写入。", terminate: true };
 		}
-		if (decision.cancelled) return { text: "确认已取消，仍在计划中；等待用户输入继续或退出。", terminate: true };
-		this.state.adjustmentRounds++;
-		this.save(ctx);
-		return { text: `仍在计划中，请根据用户补充修订并重新 submit：\n${decision.feedback || "继续澄清不确定部分"}` };
+		const supplement = !signal?.aborted && decision === "supplement";
+		if (supplement) {
+			this.state.adjustmentRounds++;
+			this.save(ctx);
+		}
+		const message = supplement ? "仍在计划中，请在主输入框补充内容，发送后继续修订计划。"
+			: "确认已取消，仍在计划中；等待用户输入继续，只有明确要求退出才结束 plan。";
+		ctx.ui.notify(message, "info");
+		// terminate 仅在整批结果都同意时生效；中断运行还会阻止排队续跑，并由 TUI 恢复排队草稿。
+		ctx.abort();
+		return { text: message, terminate: true };
 	}
 
 	private async launch(ctx: ExtensionContext, generation: number): Promise<void> {

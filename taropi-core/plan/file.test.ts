@@ -3,12 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPlanFile, findActivePlan, hasPlanSteps, planFilePath, planTitle, renderPlanFile, safeFileNamePart, savePlanFile } from "./file.ts";
+import { createPlanFile, findActivePlan, hasPlanSteps, planFilePath, planTitle, publishPlanFile, renderPlanFile, safeFileNamePart, savePlanFile } from "./file.ts";
 import type { WorkflowState } from "./types.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
-	return { ...actual, renameSync: vi.fn(actual.renameSync) };
+	return { ...actual, renameSync: vi.fn(actual.renameSync), linkSync: vi.fn(actual.linkSync) };
 });
 
 const directories: string[] = [];
@@ -18,9 +18,12 @@ afterEach(() => {
 	for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 function tempDir(): string { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "plan-file-")); directories.push(directory); return directory; }
+let sequence = 0;
 function state(cwd: string, sessionId = "session-a"): WorkflowState {
-	return { phase: "planning", task: '任务：含"引号"\n---\n中文', planText: "", adjustmentRounds: 0, pendingLaunch: false,
-		planFile: createPlanFile(cwd, sessionId, '任务：含"引号"\n---\n中文') };
+	const task = '任务：含"引号"\n---\n中文';
+	const planFile = createPlanFile(cwd, sessionId, task, new Date(), `测试-${sequence++}`);
+	expect(publishPlanFile(planFile)).toBe("created");
+	return { phase: "planning", task, planText: "", adjustmentRounds: 0, pendingLaunch: false, planFile };
 }
 
 describe("Markdown 检查点", () => {
@@ -85,22 +88,69 @@ describe("Markdown 检查点", () => {
 	it("原子替换失败不损坏原文件，清理临时文件", () => {
 		const cwd = tempDir(); const current = state(cwd); savePlanFile(current, "planning");
 		const before = fs.readFileSync(current.planFile!.path, "utf8");
-		vi.spyOn(fs, "renameSync").mockImplementation(() => { throw new Error("拒绝写入"); });
+		vi.spyOn(fs, "renameSync").mockImplementationOnce(() => { throw new Error("拒绝写入"); });
 		current.planText = PLAN;
 		expect(savePlanFile(current, "planning")).toBe(false);
 		expect(fs.readFileSync(current.planFile!.path, "utf8")).toBe(before);
 		expect(fs.readdirSync(path.dirname(current.planFile!.path))).toHaveLength(1);
 	});
-	it("目录缺失、不可用时降级，固定文件名避免同秒覆盖", () => {
+	it("目录缺失、不可用时安全失败，分钟内路径确定", () => {
 		const cwd = tempDir(); expect(findActivePlan(cwd, "session-a")).toBeUndefined();
 		fs.writeFileSync(path.join(cwd, ".pi"), "不是目录");
-		expect(savePlanFile(state(cwd), "planning")).toBe(false);
-		const date = new Date("2026-10-20T00:00:00Z");
-		expect(planFilePath(cwd, "同一任务", date)).not.toBe(planFilePath(cwd, "同一任务", date));
+		const date = new Date(2026, 9, 20, 0, 0);
+		expect(publishPlanFile(createPlanFile(cwd, "session-a", "任务", date))).toBe("failed");
+		expect(planFilePath(cwd, "同一任务", date)).toBe(planFilePath(cwd, "同一任务", date));
+	});
+	it.each([
+		[new Date(2026, 0, 1, 0, 3, 59, 999), "任务-2026-01-01-00-03.md"],
+		[new Date(2026, 11, 31, 23, 59), "任务-2026-12-31-23-59.md"],
+		[new Date(2027, 0, 1, 0, 0), "任务-2027-01-01-00-00.md"],
+	])("使用本地日历和分钟补零 %s", (date, expected) => {
+		expect(path.basename(planFilePath(tempDir(), "任务", date))).toBe(expected);
+	});
+	it("并发竞争仅发布一个完整文件，清理后同名和已完成历史均拒绝覆盖", async () => {
+		const cwd = tempDir(); const date = new Date(2026, 9, 21, 23, 30);
+		const candidates = Array.from({ length: 10 }, (_, index) => createPlanFile(cwd, `session-${index}`, `原始任务-${index}`, date, index % 2 ? "# 同/名" : "同名"));
+		const results = await Promise.all(candidates.map(async (file) => publishPlanFile(file)));
+		expect(results.filter((value) => value === "created")).toHaveLength(1);
+		expect(results.filter((value) => value === "exists")).toHaveLength(9);
+		const file = candidates[0]!;
+		const before = fs.readFileSync(file.path, "utf8");
+		expect(parseFrontmatter(before).frontmatter.task).toBe("原始任务-0");
+		expect(fs.readdirSync(path.dirname(file.path))).toEqual([path.basename(file.path)]);
+		fs.writeFileSync(file.path, renderPlanFile({ ...file.metadata, status: "completed" }, PLAN));
+		const completed = fs.readFileSync(file.path, "utf8");
+		expect(publishPlanFile(candidates[1]!)).toBe("exists");
+		expect(fs.readFileSync(file.path, "utf8")).toBe(completed);
+		expect(publishPlanFile(createPlanFile(cwd, "session-next", "任务", new Date(2026, 9, 21, 23, 31), "同名"))).toBe("created");
+	});
+	it("符号链接目标不覆盖，排他发布失败也不退化为 rename", () => {
+		const cwd = tempDir(); const file = createPlanFile(cwd, "session-a", "任务");
+		fs.mkdirSync(path.dirname(file.path), { recursive: true });
+		const target = path.join(cwd, "target.md"); fs.writeFileSync(target, "保留");
+		fs.symlinkSync(target, file.path);
+		expect(publishPlanFile(file)).toBe("exists");
+		expect(fs.readFileSync(target, "utf8")).toBe("保留");
+		expect(fs.lstatSync(file.path).isSymbolicLink()).toBe(true);
+		fs.unlinkSync(file.path);
+		vi.spyOn(fs, "linkSync").mockImplementationOnce(() => { throw Object.assign(new Error("不支持"), { code: "ENOTSUP" }); });
+		expect(publishPlanFile(file)).toBe("failed");
+		expect(fs.readdirSync(path.dirname(file.path))).toEqual([]);
+		expect(fs.renameSync).not.toHaveBeenCalled();
+	});
+	it("旧命名仍由 frontmatter 恢复，更新不迁移旧路径", () => {
+		const cwd = tempDir(); const current = state(cwd); current.planText = PLAN;
+		const oldPath = path.join(path.dirname(current.planFile!.path), "冗长任务-20261021T153014576-b3ebee4f.md");
+		fs.renameSync(current.planFile!.path, oldPath); current.planFile!.path = oldPath;
+		expect(savePlanFile(current, "planning")).toBe(true);
+		expect(findActivePlan(cwd, "session-a")?.file.path).toBe(oldPath);
 	});
 	it("文件名、标题和计划编号处理边界", () => {
 		expect(safeFileNamePart(".. /:*?\"<>| ")).toBe("plan");
-		expect(Array.from(safeFileNamePart("鹅".repeat(100)))).toHaveLength(48);
+		expect(Array.from(safeFileNamePart("鹅".repeat(100)))).toHaveLength(20);
+		expect(safeFileNamePart("\n## 短标题 -- 测试 /:*?\"<>|.\n忽略下一行")).toBe("短标题-测试");
+		expect(safeFileNamePart(`${"鹅".repeat(19)}.多余`)).toBe("鹅".repeat(19));
+		expect(safeFileNamePart("1. `修复功能`")).toBe("修复功能");
 		expect(planTitle("计划标题：中文标题")).toBe("中文标题");
 		expect(planTitle("无标题")).toBe("plan");
 		expect(hasPlanSteps("Plan:\n1. 实施")).toBe(true);

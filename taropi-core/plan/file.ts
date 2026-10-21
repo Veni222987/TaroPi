@@ -8,13 +8,28 @@ const PLAN_DIRECTORY = [".pi", "taropi", "plans"] as const;
 const SCHEMA = 1;
 const STATUSES: PlanStatus[] = ["planning", "implementing", "completed", "exited"];
 
-// createPlanFile 分配固定文件名和元数据，首次写入失败后仍可沿用同一路径重试。
-export function createPlanFile(cwd: string, sessionId: string, task: string, date = new Date()): PlanFile {
+// createPlanFile 分配固定路径和元数据，短标题不替代原始任务。
+export function createPlanFile(cwd: string, sessionId: string, task: string, date = new Date(), title = task): PlanFile {
 	return {
-		path: planFilePath(cwd, task, date),
+		path: planFilePath(cwd, title, date),
 		metadata: { schema: SCHEMA, sessionId, status: "planning", task, adjustmentRounds: 0, pendingLaunch: false,
 			createdAt: date.toISOString(), updatedAt: date.toISOString() },
 	};
+}
+
+// publishPlanFile 排他发布完整的初始 Markdown，重名或失败时不修改已有文件。
+export function publishPlanFile(file: PlanFile): "created" | "exists" | "failed" {
+	const temporaryPath = `${file.path}.${randomUUID()}.tmp`;
+	try {
+		fs.mkdirSync(path.dirname(file.path), { recursive: true });
+		fs.writeFileSync(temporaryPath, renderPlanFile(file.metadata, ""), { encoding: "utf8", flag: "wx", mode: 0o600 });
+		fs.linkSync(temporaryPath, file.path);
+		return "created";
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "EEXIST" ? "exists" : "failed";
+	} finally {
+		try { fs.unlinkSync(temporaryPath); } catch { /* 临时文件可能未创建成功。 */ }
+	}
 }
 
 // savePlanFile 原子写入元数据和正文，失败时保留原文件并返回 false。
@@ -93,16 +108,20 @@ export function planTitle(planText: string): string {
 	return match?.[1]?.trim() || "plan";
 }
 
-// safeFileNamePart 清理文件名非法字符并限制 Unicode 字符长度。
-export function safeFileNamePart(value: string): string {
-	const normalized = value.replace(/[\\/:：*?"<>|\u0000-\u001f]/g, "").replace(/\s+/g, "-").replace(/^[.-]+|[.-]+$/g, "");
-	return Array.from(normalized).slice(0, 48).join("") || "plan";
+// safeFileNamePart 清理 Markdown 标记和文件名非法字符，最多保留 20 个 Unicode 字符。
+export function safeFileNamePart(value: string, fallback = "plan"): string {
+	const firstLine = value.split(/\r\n?|\n/).find((line) => line.trim()) ?? "";
+	const normalized = firstLine.trim().replace(/^(?:#{1,6}\s*|[-*+]\s+|\d+[.)]\s+)/, "")
+		.replace(/^[`'"“”‘’]+|[`'"“”‘’]+$/g, "").replace(/[\\/:：*?"<>|\u0000-\u001f\u007f]/g, "")
+		.replace(/\s+/g, "-").replace(/-+/g, "-");
+	return Array.from(normalized.replace(/^[.\s-]+|[.\s-]+$/g, "")).slice(0, 20).join("").replace(/[.\s-]+$/g, "") || fallback;
 }
 
-// planFilePath 用任务摘要、毫秒时间和随机后缀隔离同一时刻创建的计划。
-export function planFilePath(cwd: string, task: string, date: Date): string {
-	const timestamp = date.toISOString().replace(/[-:.]/g, "").replace(/Z$/, "");
-	return path.resolve(cwd, ...PLAN_DIRECTORY, `${safeFileNamePart(task)}-${timestamp}-${randomUUID().slice(0, 8)}.md`);
+// planFilePath 使用短标题和本地分钟生成固定文件名，冲突由首次发布拒绝。
+export function planFilePath(cwd: string, title: string, date: Date): string {
+	const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes()];
+	const timestamp = parts.map((part, index) => String(part).padStart(index === 0 ? 4 : 2, "0")).join("-");
+	return path.resolve(cwd, ...PLAN_DIRECTORY, `${safeFileNamePart(title)}-${timestamp}.md`);
 }
 
 function readMetadata(content: string): PlanMetadata | undefined {
