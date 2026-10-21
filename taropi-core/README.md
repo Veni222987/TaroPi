@@ -10,7 +10,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 📝 追加系统提示词 | `../taropi-plain/APPEND_SYSTEM.md`：中文表达、工作方式与工具调用规则；按 `../taropi-plain/recommend/README.md` 复制后由 Pi 追加到默认提示词 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
-| 📋 Plan Workflow | `/plan 任务描述` — 三阶段状态机（`plan/`）：调研并在不确定时反复澄清 → TUI 写入计划文件并展示地址 → 按确认计划实施 |
+| 📋 Plan Workflow | `/plan 任务描述` — 会话级三态（idle / planning / implementing）：只读调研 → 工具内真实用户确认 → 实施；状态与正文保存在同一个 Markdown frontmatter，支持中断、恢复、自然语言退出与手动切模型 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索（Brave/Exa/OpenAI）、URL 正文抓取、GitHub 仓库/文件、图片、本地 PDF 文本提取 |
 | 🖥️ HUD 状态面板 | 常驻显示 Git、模型/上下文/Token 用量，以及本机已加载 HUD 的交互会话目录状态；idle 表示等待用户，working 表示模型、工具或自动处理执行中。外部包可通过 `taropi-hud` 注册带刷新能力的文本子版块，`/hud-fresh` 并发刷新全部子版块 |
@@ -61,6 +61,14 @@ Pi 原生 `SYSTEM.md`、`--system-prompt` 或其他扩展的强制完整提示�
 ```
 
 已有文件是权限设置的唯一来源：不合并默认规则，不补回已删除的字段或规则，也不写回文件。缺省 `externalWriteConfirm` 为 `false`，缺省 `deny` 为 `[]`；使用 `{}` 可关闭所有权限限制。配置格式错误时明确报错，不覆盖原文件。修改后执行 `/reload` 或重启生效。
+
+### Plan 工作流（可选）
+
+只有 `/plan` 可以进入计划流程；模型通过固定 `plan` 工具的 status/submit/complete/exit 流转。规划默认 Au，禁止 edit/write；确认后先 compact 再切 Ag 实施，退出后保持当前模型。工具声明和系统提示不随阶段变化，规则仅在流转时发送一次。
+
+状态与正文一起写入 `.pi/taropi/plans/` 的 Markdown frontmatter，不另建状态 JSON，也不写会话 custom 条目。中断或恢复后保持阶段，等下一次输入继续；complete/exit 明确结束。旧计划文件不迁移。
+
+用户配置为 `getAgentDir()/plan.json`（默认 `~/.pi/agent/plan.json`），支持 planning/implementing/idle 各自的 model、blockedTools、prompt 覆盖；model=null 可关闭自动切换。详见 [Plan 工作流说明](plan/README.md)。
 
 ### 网络访问（`web-access/`）
 
@@ -163,7 +171,7 @@ TaroPi/
 ├── taropi-core/
 │   ├── index.ts          # 入口：统一注册所有模块
 │   ├── sub-agents/       # subagent 工具（single / parallel / chain 派发）
-│   ├── plan/             # /plan 三阶段状态机（调研澄清 / TUI 确认与计划文件 / 主 Agent 实施）
+│   ├── plan/             # /plan 三态、Markdown 检查点、工具流转与用户确认
 │   ├── preamble/         # 全局 PREAMBLE.md 角色替换与配置读取
 │   ├── permissions/      # 权限管控
 │   ├── web-access/       # 网络访问：web_search / fetch_content / get_search_content / source_check
