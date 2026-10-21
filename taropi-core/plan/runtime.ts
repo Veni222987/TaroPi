@@ -5,9 +5,7 @@ import { resolveModelAlias } from "../model-alias/store.ts";
 export async function switchPlanModel(pi: ExtensionAPI, ctx: ExtensionContext, name: string | undefined): Promise<void> {
 	if (!name) return;
 	try {
-		const resolved = resolveModelAlias(name) ?? name;
-		const separator = resolved.indexOf("/");
-		const model = separator > 0 ? ctx.modelRegistry.find(resolved.slice(0, separator), resolved.slice(separator + 1)) : undefined;
+		const model = resolvePlanModel(ctx, name);
 		if (!model) {
 			ctx.ui.notify(`未找到模型 ${name}，继续使用当前模型`, "warning");
 			return;
@@ -17,4 +15,12 @@ export async function switchPlanModel(pi: ExtensionAPI, ctx: ExtensionContext, n
 	} catch (error) {
 		ctx.ui.notify(`切换模型 ${name} 失败，继续使用当前模型：${error instanceof Error ? error.message : String(error)}`, "warning");
 	}
+}
+
+// resolvePlanModel 解析阶段模型别名，不切换主会话模型。
+export function resolvePlanModel(ctx: ExtensionContext, name: string | undefined): ExtensionContext["model"] {
+	if (!name) return undefined;
+	const resolved = resolveModelAlias(name) ?? name;
+	const separator = resolved.indexOf("/");
+	return separator > 0 ? ctx.modelRegistry.find(resolved.slice(0, separator), resolved.slice(separator + 1)) : undefined;
 }
