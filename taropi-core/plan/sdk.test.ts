@@ -146,6 +146,36 @@ async function eventually(check: () => boolean): Promise<void> {
 }
 
 describe("真实 AgentSession 缓存与恢复回归", () => {
+	it("多轮讨论后用指代参数 /plan，标题请求读取实际任务，submit 改名不改写历史", async () => {
+		const f = await fixture(); const session = await f.open();
+		try {
+			await session.prompt("企业微信 /fs 改为 /rs 原地续接已有会话");
+			await session.prompt("本机和企业微信需要跨进程占用协调");
+			const before = structuredClone(session.messages);
+			await session.prompt("/plan 可以的，按照这个方式，输出计划"); await session.waitForIdle();
+			const data = JSON.stringify(f.titleRequests[0]!.messages);
+			expect(data).toContain("/rs 原地续接已有会话"); expect(data).toContain("跨进程占用协调");
+			expect(data).toContain("可以的，按照这个方式，输出计划"); expect(f.titleRequests[0]!.messages).toHaveLength(2);
+			expect(session.messages.slice(0, before.length)).toEqual(before);
+			const initial = findActivePlan(f.cwd, f.sessionManager.getSessionId())!.file;
+			const entries = structuredClone(f.sessionManager.getBranch());
+			vi.mocked(f.ui.select).mockResolvedValueOnce("补充内容");
+			await session.prompt("提交计划"); await session.waitForIdle();
+			const renamed = findActivePlan(f.cwd, f.sessionManager.getSessionId())!.file;
+			expect(renamed.path).not.toBe(initial.path);
+			expect(path.basename(renamed.path)).toBe(path.basename(initial.path).replace("缓存计划-", "缓存回归-"));
+			expect(renamed.metadata.createdAt).toBe(initial.metadata.createdAt);
+			expect(fs.existsSync(initial.path)).toBe(false);
+			expect(f.sessionManager.getBranch().slice(0, entries.length)).toEqual(entries);
+			const result = session.messages.findLast((message) => message.role === "toolResult" && message.toolName === "plan");
+			expect(JSON.stringify(result)).toContain(renamed.path);
+			await session.prompt("改名后继续补充"); await session.waitForIdle();
+			expect(f.prefixErrors).toEqual([]); expect(f.errors).toEqual([]);
+			expect(f.titleRequests).toHaveLength(1);
+			expect(fs.readdirSync(path.dirname(renamed.path))).toEqual([path.basename(renamed.path)]);
+			expect(JSON.stringify(session.messages)).not.toContain("为任务生成简短文件名标题");
+		} finally { session.dispose(); }
+	});
 	it("标题辅助请求取消及迟到结果均不创建计划或进入主会话历史", async () => {
 		const f = await fixture(false, true); const session = await f.open();
 		try {
@@ -198,7 +228,8 @@ describe("真实 AgentSession 缓存与恢复回归", () => {
 			expect(f.titleRequests).toHaveLength(1);
 			expect(f.titleRequests[0]).toMatchObject({ model: "planner" });
 			expect(f.titleRequests[0]!.messages).toHaveLength(2);
-			expect(f.titleRequests[0]!.messages[1]).toMatchObject({ role: "user", content: [{ type: "text", text: "修复缓存" }] });
+			expect(f.titleRequests[0]!.messages[1]).toMatchObject({ role: "user", content: [{ type: "text", text: expect.stringContaining("当前 /plan 参数：\n修复缓存") }] });
+			expect(JSON.stringify(f.titleRequests[0]!.messages[1])).toContain("已有对话");
 			expect(JSON.stringify(session.messages)).not.toContain("为任务生成简短文件名标题");
 			expect(JSON.stringify(session.messages)).not.toContain('"text":"缓存计划"');
 			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "custom" || entry.type === "custom_message" || entry.type === "context_edit")).toEqual([]);

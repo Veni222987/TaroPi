@@ -7,8 +7,9 @@ import type { PlanDocument, PlanFile, PlanMetadata, PlanStatus, WorkflowState } 
 const PLAN_DIRECTORY = [".pi", "taropi", "plans"] as const;
 const SCHEMA = 1;
 const STATUSES: PlanStatus[] = ["planning", "implementing", "completed", "exited"];
+const PLAN_TITLE_PATTERN = /^[\t ]*(?:\*{1,2})?(?:计划标题|标题)(?:\*{1,2})?[\t ]*[：:][\t ]*([^\r\n]+?)[\t ]*\r?$/m;
 
-// createPlanFile 分配固定路径和元数据，短标题不替代原始任务。
+// createPlanFile 分配初始路径和元数据，短标题不替代原始任务。
 export function createPlanFile(cwd: string, sessionId: string, task: string, date = new Date(), title = task): PlanFile {
 	return {
 		path: planFilePath(cwd, title, date),
@@ -30,6 +31,34 @@ export function publishPlanFile(file: PlanFile): "created" | "exists" | "failed"
 	} finally {
 		try { fs.unlinkSync(temporaryPath); } catch { /* 临时文件可能未创建成功。 */ }
 	}
+}
+
+// renamePlanFile 计划中按明确标题和创建时间排他改名，失败保留原路径且不覆盖目标。
+export function renamePlanFile(cwd: string, file: PlanFile, planText: string): "renamed" | "unchanged" | "exists" | "failed" {
+	if (file.metadata.status !== "planning") return "unchanged";
+	const title = safeFileNamePart(planText.match(PLAN_TITLE_PATTERN)?.[1] ?? "", "");
+	if (!title) return "unchanged";
+	const date = new Date(file.metadata.createdAt);
+	if (!Number.isFinite(date.getTime())) return "failed";
+	const target = planFilePath(cwd, title, date);
+	if (target === file.path) return "unchanged";
+	try {
+		fs.linkSync(file.path, target);
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "EEXIST" ? "exists" : "failed";
+	}
+	try {
+		fs.unlinkSync(file.path);
+	} catch {
+		try {
+			const original = fs.statSync(file.path);
+			const linked = fs.lstatSync(target);
+			if (original.dev === linked.dev && original.ino === linked.ino) fs.unlinkSync(target);
+		} catch { /* 回滚也失败时保留原路径，残留副本需要人工检查。 */ }
+		return "failed";
+	}
+	file.path = target;
+	return "renamed";
 }
 
 // savePlanFile 原子写入元数据和正文，失败时保留原文件并返回 false。
@@ -101,9 +130,9 @@ export function hasPlanSteps(text: string): boolean {
 	return /^\s*\d+[.)]\s+\S.*/m.test(text);
 }
 
-// planTitle 从完整计划中提取展示标题，不改变既有文件名。
+// planTitle 从完整计划中提取展示标题，缺失时回退目标或 plan。
 export function planTitle(planText: string): string {
-	const match = planText.match(/^\s*(?:\*{1,2})?(?:计划标题|标题)(?:\*{1,2})?\s*[：:]\s*(.+?)\s*$/m)
+	const match = planText.match(PLAN_TITLE_PATTERN)
 		?? planText.match(/^\s*(?:\*{1,2})?目标(?:\*{1,2})?\s*[：:]\s*(.+?)\s*$/m);
 	return match?.[1]?.trim() || "plan";
 }
@@ -117,7 +146,7 @@ export function safeFileNamePart(value: string, fallback = "plan"): string {
 	return Array.from(normalized.replace(/^[.\s-]+|[.\s-]+$/g, "")).slice(0, 20).join("").replace(/[.\s-]+$/g, "") || fallback;
 }
 
-// planFilePath 使用短标题和本地分钟生成固定文件名，冲突由首次发布拒绝。
+// planFilePath 使用短标题和本地分钟生成确定性文件名，创建和改名均拒绝覆盖。
 export function planFilePath(cwd: string, title: string, date: Date): string {
 	const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes()];
 	const timestamp = parts.map((part, index) => String(part).padStart(index === 0 ? 4 : 2, "0")).join("-");

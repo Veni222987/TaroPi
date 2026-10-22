@@ -1,8 +1,8 @@
 import type { AssistantMessage, Context, Model, Api, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveModelAlias } from "../model-alias/store.ts";
-import { generatePlanTitle } from "./title.ts";
+import { generatePlanTitle, planTitleInput } from "./title.ts";
 
 vi.mock("../model-alias/store.ts", () => ({ resolveModelAlias: vi.fn() }));
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers(); });
@@ -16,13 +16,14 @@ function fixture() {
 	const notify = vi.fn();
 	const select = vi.fn<ExtensionContext["ui"]["select"]>();
 	const find = vi.fn(() => configured as Model<Api> | undefined);
-	const ctx = { model: current, modelRegistry: { streamSimple, find }, hasUI: false, ui: { notify, select } } as unknown as ExtensionContext;
+	const sessionManager = SessionManager.inMemory();
+	const ctx = { model: current, modelRegistry: { streamSimple, find }, sessionManager, hasUI: false, ui: { notify, select } } as unknown as ExtensionContext;
 	const controller = new AbortController();
-	return { ctx, controller, streamSimple, result, response, current, configured, find, notify, select };
+	return { ctx, controller, streamSimple, result, response, current, configured, find, notify, select, sessionManager };
 }
 
 describe("计划短标题辅助请求", () => {
-	it("解析规划模型别名，仅发送任务和命名指令，不携带历史或工具", async () => {
+	it("解析规划模型别名，无历史时仅发送任务和命名指令，不携带工具", async () => {
 		const f = fixture(); vi.mocked(resolveModelAlias).mockReturnValueOnce("test/planner");
 		expect(await generatePlanTitle("原始完整任务\n细节", f.ctx, "Au", f.controller.signal)).toBe("精简计划文件");
 		expect(f.find).toHaveBeenCalledWith("test", "planner");
@@ -32,6 +33,63 @@ describe("计划短标题辅助请求", () => {
 		expect(context.systemPrompt).toContain("最多 20"); expect(context.tools).toBeUndefined();
 		expect(options).toMatchObject({ maxTokens: 128, cacheRetention: "none", signal: expect.any(AbortSignal) });
 		expect(f.notify).not.toHaveBeenCalled();
+	});
+	it("聊到一半切 /plan 时传递可见上下文，忽略工具、图片与思考且不修改历史", async () => {
+		const f = fixture();
+		f.sessionManager.appendMessage({ role: "user", content: [
+			{ type: "text", text: "企业微信 /fs 改为 /rs 原地续接" }, { type: "image", data: "图片不发送", mimeType: "image/png" },
+		], timestamp: 1 });
+		f.sessionManager.appendMessage({ ...f.response, role: "assistant", timestamp: 2, content: [
+			{ type: "thinking", thinking: "思考不发送" }, { type: "text", text: "需要跨进程占用协调" },
+			{ type: "toolCall", id: "call", name: "bash", arguments: { command: "工具参数不发送" } },
+		] });
+		f.sessionManager.appendMessage({ role: "toolResult", toolCallId: "call", toolName: "bash", content: [{ type: "text", text: "工具结果不发送" }], isError: false, timestamp: 3 });
+		const before = structuredClone(f.sessionManager.getBranch());
+		await generatePlanTitle("可以的，按照这个方式，输出计划", f.ctx, undefined, f.controller.signal);
+		const context = f.streamSimple.mock.calls[0]![1];
+		const data = JSON.stringify(context.messages);
+		expect(data).toContain("企业微信 /fs 改为 /rs 原地续接"); expect(data).toContain("跨进程占用协调");
+		expect(data).toContain("可以的，按照这个方式，输出计划");
+		for (const excluded of ["图片不发送", "思考不发送", "工具参数不发送", "工具结果不发送"]) expect(data).not.toContain(excluded);
+		expect(context.systemPrompt).toContain("指代性话语"); expect(context.tools).toBeUndefined();
+		expect(context.messages).toHaveLength(1); expect(f.sessionManager.getBranch()).toEqual(before);
+	});
+	it("只保留最新压缩摘要及其后的会话，不重发压缩前的原始历史", () => {
+		const f = fixture();
+		f.sessionManager.appendMessage({ role: "user", content: "被压缩的旧任务", timestamp: 1 });
+		f.sessionManager.appendCompaction("旧压缩摘要", null, 100);
+		f.sessionManager.appendMessage({ role: "user", content: "也被压缩的任务", timestamp: 2 });
+		f.sessionManager.appendCompaction("正在处理 /rs 和跨进程锁", null, 200);
+		f.sessionManager.appendMessage({ role: "user", content: "不等待，直接接管", timestamp: 3 });
+		const data = planTitleInput("输出计划", f.sessionManager.getBranch());
+		expect(data).toContain("压缩摘要：\n正在处理 /rs 和跨进程锁"); expect(data).toContain("不等待，直接接管");
+		expect(data).not.toContain("被压缩"); expect(data).not.toContain("旧压缩摘要");
+	});
+	it("当前分支摘要参与命名，但不读取已放弃分支", () => {
+		const f = fixture();
+		const root = f.sessionManager.appendMessage({ role: "user", content: "共同任务", timestamp: 1 });
+		f.sessionManager.appendMessage({ role: "user", content: "已放弃分支的原始文本", timestamp: 2 });
+		f.sessionManager.branchWithSummary(root, "分支结论：原地续接");
+		expect(planTitleInput("输出计划", f.sessionManager.getBranch())).toContain("分支结论：原地续接");
+		expect(planTitleInput("输出计划", f.sessionManager.getBranch())).not.toContain("已放弃分支的原始文本");
+	});
+	it.each([false, true])("会话文本最多 8000 个 Unicode 字符，摘要是否存在：%s", (withSummary) => {
+		const f = fixture();
+		if (withSummary) f.sessionManager.appendCompaction("摘".repeat(10_000), null, 100);
+		f.sessionManager.appendMessage({ role: "user", content: "过时文本", timestamp: 1 });
+		f.sessionManager.appendMessage({ ...f.response, role: "assistant", timestamp: 2, content: [{ type: "text", text: "鹅🪿".repeat(10_000) }] });
+		const data = planTitleInput("新的任务参数必须完整保留", f.sessionManager.getBranch());
+		const context = data.split("最近会话（仅供命名参考）：\n")[1]!.split("\n\n当前 /plan 参数：\n")[0]!;
+		expect(Array.from(context).length).toBeLessThanOrEqual(8_000);
+		expect(context).not.toContain("过时文本"); expect(context).not.toContain("\uFFFD");
+		expect(data.endsWith("新的任务参数必须完整保留")).toBe(true);
+		if (withSummary) expect(context.startsWith("压缩摘要：\n摘")).toBe(true);
+	});
+	it("读取上下文失败时仍只用任务概括，不取消创建", async () => {
+		const f = fixture(); vi.spyOn(f.sessionManager, "getBranch").mockImplementationOnce(() => { throw new Error("读取失败"); });
+		expect(await generatePlanTitle("任务", f.ctx, undefined, f.controller.signal)).toBe("精简计划文件");
+		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("上下文读取失败"), "warning");
+		expect(JSON.stringify(f.streamSimple.mock.calls[0]![1].messages)).toContain('"text":"任务"');
 	});
 	it.each([undefined, "不存在", "test/missing"])("模型 %s 无法解析时沿用当前模型", async (name) => {
 		const f = fixture(); f.find.mockReturnValueOnce(undefined);

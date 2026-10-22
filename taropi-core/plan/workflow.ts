@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InputEvent, InputEventResult } from "@earendil-works/pi-coding-agent";
 import { loadPlanConfig } from "./config.ts";
-import { createPlanFile, findActivePlan, hasPlanSteps, publishPlanFile, savePlanFile } from "./file.ts";
+import { createPlanFile, findActivePlan, hasPlanSteps, publishPlanFile, renamePlanFile, savePlanFile } from "./file.ts";
 import { phaseMessage } from "./prompts.ts";
 import { switchPlanModel } from "./runtime.ts";
 import { generatePlanTitle } from "./title.ts";
@@ -164,7 +164,14 @@ export class PlanWorkflow {
 		if (this.state.phase !== "planning") throw new Error("只有计划阶段可以 submit");
 		if (!hasPlanSteps(text)) throw new Error("submit 需要包含编号步骤的完整计划");
 		this.state.planText = text.trim();
-		this.save(ctx);
+		const saved = this.save(ctx);
+		if (saved && this.state.planFile) {
+			const renamed = renamePlanFile(ctx.cwd, this.state.planFile, this.state.planText);
+			if (renamed === "exists" || renamed === "failed") ctx.ui.notify(renamed === "exists"
+				? "计划标题对应的同分钟文件已存在，保留原文件名，不覆盖目标"
+				: "计划文件改名失败，保留原路径；请检查权限、文件系统能力及是否存在残留副本", "warning");
+		}
+		const fileMessage = `计划文件：${this.state.planFile?.path ?? "未保存"}`;
 		const generation = this.generation;
 		const decision = await showPlanDecision(ctx, this.state.planFile, signal);
 		if (generation !== this.generation) return { text: "确认已失效，原检查点保持不变；不处理旧会话决策。", terminate: true };
@@ -173,7 +180,7 @@ export class PlanWorkflow {
 			this.state.pendingLaunch = true;
 			this.autoLaunch = true;
 			this.save(ctx);
-			return { text: "用户已确认。等待本轮结束后压缩上下文、切换实施模型并下发实施规则；不要提前写入。", terminate: true };
+			return { text: `用户已确认。等待本轮结束后压缩上下文、切换实施模型并下发实施规则；不要提前写入。\n${fileMessage}`, terminate: true };
 		}
 		const supplement = !signal?.aborted && decision === "supplement";
 		if (supplement) {
@@ -185,7 +192,7 @@ export class PlanWorkflow {
 		ctx.ui.notify(message, "info");
 		// terminate 仅在整批结果都同意时生效；中断运行还会阻止排队续跑，并由 TUI 恢复排队草稿。
 		ctx.abort();
-		return { text: message, terminate: true };
+		return { text: `${message}\n${fileMessage}`, terminate: true };
 	}
 
 	private async launch(ctx: ExtensionContext, generation: number): Promise<void> {
@@ -198,9 +205,11 @@ export class PlanWorkflow {
 		this.pi.sendUserMessage(this.launchMessage, { deliverAs: "followUp" });
 	}
 
-	private save(ctx: ExtensionContext, status: PlanStatus = this.state.phase === "implementing" ? "implementing" : "planning", result?: string): void {
-		if (!savePlanFile(this.state, status, result)) ctx.ui.notify("计划文件未能持久化，内存状态仍可用；重启可能恢复旧检查点", "warning");
+	private save(ctx: ExtensionContext, status: PlanStatus = this.state.phase === "implementing" ? "implementing" : "planning", result?: string): boolean {
+		const saved = savePlanFile(this.state, status, result);
+		if (!saved) ctx.ui.notify("计划文件未能持久化，内存状态仍可用；重启可能恢复旧检查点", "warning");
 		this.render();
+		return saved;
 	}
 }
 
