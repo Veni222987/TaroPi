@@ -32,7 +32,7 @@ function setup() {
 		registerTool: vi.fn(), registerCommand: vi.fn(), on: vi.fn(), events: createEventBus() };
 	const pi = api as unknown as ExtensionAPI;
 	const notify = vi.fn();
-	const select = vi.fn(async () => "开始实施" as string | undefined);
+	const select = vi.fn<ExtensionContext["ui"]["select"]>(async () => "开始实施");
 	const input = vi.fn(async () => "补充边界" as string | undefined);
 	const compact = vi.fn<(options?: CompactOptions) => void>();
 	const ctx = { cwd, mode: "rpc", hasUI: true, ui: { notify, select, input }, abort: vi.fn(),
@@ -56,7 +56,7 @@ describe("Plan 注册与三态流转", () => {
 		expect(api.on.mock.calls.map(([name]) => name)).toEqual(["tool_call", "input", "agent_settled", "session_compact_failed", "session_start", "session_shutdown"]);
 		expect(api.appendEntry).not.toHaveBeenCalled(); expect(api.setActiveTools).not.toHaveBeenCalled();
 	});
-	it("标题等待期间重复入口不发起第二次请求，路径在创建及流转后保持固定", async () => {
+	it("标题等待期间重复入口不发起第二次请求，submit 改名后实施和退出路径固定", async () => {
 		const { workflow, ctx, api } = setup();
 		let finish: ((title: string) => void) | undefined;
 		vi.mocked(generatePlanTitle).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
@@ -68,10 +68,52 @@ describe("Plan 注册与三态流转", () => {
 		expect(path.basename(file.path)).toMatch(/^短标题-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.md$/);
 		expect(file.metadata.task).toBe("原始任务\n所有细节");
 		const originalPath = file.path;
-		await workflow.dispatch({ action: "submit", text: PLAN }, ctx);
-		expect(workflow.state.planFile!.path).toBe(originalPath);
+		const result = await workflow.dispatch({ action: "submit", text: PLAN }, ctx);
+		const renamed = workflow.state.planFile!.path;
+		expect(renamed).not.toBe(originalPath); expect(path.basename(renamed)).toMatch(/^测试-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.md$/);
+		expect(result.text).toContain(renamed); expect(fs.existsSync(originalPath)).toBe(false);
 		await workflow.dispatch({ action: "exit" }, ctx);
-		expect(fs.existsSync(originalPath)).toBe(true);
+		expect(fs.existsSync(renamed)).toBe(true);
+	});
+	it("每次 submit 同步标题和原创建分钟，确认框与工具结果都给出新路径，恢复不改名", async () => {
+		vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 9, 22, 22, 55));
+		const { workflow, ctx, select, cwd } = setup(); await workflow.enter("输出计划", ctx);
+		const initial = workflow.state.planFile!.path;
+		vi.setSystemTime(new Date(2026, 9, 23, 0, 12));
+		select.mockResolvedValueOnce("补充内容");
+		const first = await workflow.dispatch({ action: "submit", text: PLAN }, ctx);
+		const pathA = workflow.state.planFile!.path;
+		expect(path.basename(pathA)).toBe("测试-2026-10-22-22-55.md"); expect(first.text).toContain(pathA);
+		expect(select.mock.calls.at(-1)?.[0]).toContain(pathA);
+		const revised = PLAN.replace("计划标题：测试", "计划标题：更好的标题");
+		select.mockResolvedValueOnce("暂不决定");
+		const second = await workflow.dispatch({ action: "submit", text: revised }, ctx);
+		const pathB = workflow.state.planFile!.path;
+		expect(path.basename(pathB)).toBe("更好的标题-2026-10-22-22-55.md"); expect(second.text).toContain(pathB);
+		expect(fs.existsSync(initial)).toBe(false); expect(fs.existsSync(pathA)).toBe(false);
+		workflow.restore(ctx); expect(workflow.state.planFile!.path).toBe(pathB);
+		expect(findActivePlan(cwd, "session-a")?.planText).toBe(revised);
+		select.mockResolvedValueOnce("暂不决定"); await workflow.dispatch({ action: "submit", text: revised }, ctx);
+		expect(workflow.state.planFile!.path).toBe(pathB);
+		expect(fs.readdirSync(path.dirname(pathB))).toEqual([path.basename(pathB)]);
+	});
+	it.each(["exists", "failed"] as const)("submit 改名 %s 仍可确认，告警并保留旧路径", async (result) => {
+		const { workflow, ctx, notify, select } = setup(); await workflow.enter("任务", ctx);
+		const original = workflow.state.planFile!.path;
+		vi.spyOn(fileModule, "renamePlanFile").mockReturnValueOnce(result);
+		const response = await workflow.dispatch({ action: "submit", text: PLAN }, ctx);
+		expect(workflow.state.phase).toBe("implementing"); expect(workflow.state.planFile!.path).toBe(original);
+		expect(response.text).toContain(original); expect(select.mock.calls.at(-1)?.[0]).toContain(original);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining(result === "exists" ? "已存在" : "改名失败"), "warning");
+	});
+	it("正文保存失败时不改名，保留原路径和旧磁盘正文", async () => {
+		const { workflow, ctx, select } = setup(); await workflow.enter("任务", ctx);
+		const original = workflow.state.planFile!.path; const before = fs.readFileSync(original, "utf8");
+		vi.spyOn(fileModule, "savePlanFile").mockReturnValueOnce(false);
+		const rename = vi.spyOn(fileModule, "renamePlanFile"); select.mockResolvedValueOnce("暂不决定");
+		await workflow.dispatch({ action: "submit", text: PLAN }, ctx);
+		expect(rename).not.toHaveBeenCalled(); expect(workflow.state.planFile!.path).toBe(original);
+		expect(fs.readFileSync(original, "utf8")).toBe(before);
 	});
 	it("等待 idle 期间也锁住入口，用户新输入可取消创建", async () => {
 		const { workflow, ctx, api } = setup();

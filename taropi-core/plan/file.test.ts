@@ -3,12 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPlanFile, findActivePlan, hasPlanSteps, planFilePath, planTitle, publishPlanFile, renderPlanFile, safeFileNamePart, savePlanFile } from "./file.ts";
+import { createPlanFile, findActivePlan, hasPlanSteps, planFilePath, planTitle, publishPlanFile, renamePlanFile, renderPlanFile, safeFileNamePart, savePlanFile } from "./file.ts";
 import type { WorkflowState } from "./types.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
-	return { ...actual, renameSync: vi.fn(actual.renameSync), linkSync: vi.fn(actual.linkSync) };
+	return { ...actual, renameSync: vi.fn(actual.renameSync), linkSync: vi.fn(actual.linkSync), unlinkSync: vi.fn(actual.unlinkSync) };
 });
 
 const directories: string[] = [];
@@ -144,6 +144,82 @@ describe("Markdown 检查点", () => {
 		fs.renameSync(current.planFile!.path, oldPath); current.planFile!.path = oldPath;
 		expect(savePlanFile(current, "planning")).toBe(true);
 		expect(findActivePlan(cwd, "session-a")?.file.path).toBe(oldPath);
+	});
+	it("submit 改名保留创建分钟，修订标题可再次改名且恢复只找到一个文件", () => {
+		const cwd = tempDir(); const current = state(cwd); current.planText = PLAN;
+		current.planFile!.metadata.createdAt = new Date(2026, 9, 22, 22, 55).toISOString();
+		expect(savePlanFile(current, "planning")).toBe(true);
+		const originalPath = current.planFile!.path;
+		const originalContent = fs.readFileSync(originalPath, "utf8");
+		expect(renamePlanFile(cwd, current.planFile!, PLAN)).toBe("renamed");
+		const first = current.planFile!.path;
+		expect(path.basename(first)).toBe("缓存验证-2026-10-22-22-55.md");
+		expect(fs.existsSync(originalPath)).toBe(false); expect(fs.readFileSync(first, "utf8")).toBe(originalContent);
+		expect(renamePlanFile(cwd, current.planFile!, PLAN)).toBe("unchanged");
+		current.planText = PLAN.replace("缓存验证", "修订后的标题"); savePlanFile(current, "planning");
+		expect(renamePlanFile(cwd, current.planFile!, current.planText)).toBe("renamed");
+		expect(path.basename(current.planFile!.path)).toBe("修订后的标题-2026-10-22-22-55.md");
+		expect(fs.existsSync(first)).toBe(false);
+		expect(findActivePlan(cwd, "session-a")).toMatchObject({ planText: current.planText, file: { path: current.planFile!.path } });
+		expect(fs.readdirSync(path.dirname(first))).toEqual([path.basename(current.planFile!.path)]);
+	});
+	it.each(["目标：不是标题\n1. 修改", "计划标题：\n1. 修改", "计划标题：/:*?<>|\n1. 修改"])("缺失或非法明确标题不改名：%s", (text) => {
+		const cwd = tempDir(); const current = state(cwd); const original = current.planFile!.path;
+		expect(renamePlanFile(cwd, current.planFile!, text)).toBe("unchanged");
+		expect(current.planFile!.path).toBe(original); expect(fs.existsSync(original)).toBe(true);
+	});
+	it("合法 plan 标题可改名，非法创建时间不改名", () => {
+		const cwd = tempDir(); const current = state(cwd);
+		expect(renamePlanFile(cwd, current.planFile!, "计划标题：plan")).toBe("renamed");
+		const original = current.planFile!.path;
+		current.planFile!.metadata.createdAt = "bad";
+		expect(renamePlanFile(cwd, current.planFile!, PLAN)).toBe("failed");
+		expect(current.planFile!.path).toBe(original);
+	});
+	it.each(["implementing", "completed", "exited"] as const)("%s 阶段即使标题变更也不改名", (status) => {
+		const cwd = tempDir(); const current = state(cwd); const original = current.planFile!.path;
+		savePlanFile(current, status);
+		expect(renamePlanFile(cwd, current.planFile!, PLAN)).toBe("unchanged");
+		expect(current.planFile!.path).toBe(original);
+	});
+	it.each([false, true])("改名目标已存在不覆盖，包括符号链接：%s", (symlink) => {
+		const cwd = tempDir(); const current = state(cwd); current.planText = PLAN; savePlanFile(current, "planning");
+		const file = current.planFile!; const original = file.path; const before = fs.readFileSync(original, "utf8");
+		const target = planFilePath(cwd, "缓存验证", new Date(file.metadata.createdAt));
+		if (symlink) { const other = path.join(cwd, "other.md"); fs.writeFileSync(other, "不覆盖"); fs.symlinkSync(other, target); }
+		else fs.writeFileSync(target, "不覆盖");
+		expect(renamePlanFile(cwd, file, PLAN)).toBe("exists");
+		expect(file.path).toBe(original); expect(fs.readFileSync(original, "utf8")).toBe(before);
+		expect(fs.readFileSync(target, "utf8")).toBe("不覆盖");
+		if (symlink) expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
+	});
+	it("link 失败不使用覆盖 rename，unlink 失败回滚目标链接", () => {
+		const cwd = tempDir(); const current = state(cwd); const file = current.planFile!; const original = file.path;
+		vi.spyOn(fs, "linkSync").mockImplementationOnce(() => { throw new Error("link 不支持"); });
+		expect(renamePlanFile(cwd, file, PLAN)).toBe("failed");
+		expect(file.path).toBe(original); expect(fs.existsSync(original)).toBe(true);
+		vi.spyOn(fs, "unlinkSync").mockImplementationOnce(() => { throw new Error("旧文件删除失败"); });
+		expect(renamePlanFile(cwd, file, PLAN)).toBe("failed");
+		expect(file.path).toBe(original); expect(fs.readdirSync(path.dirname(original))).toEqual([path.basename(original)]);
+	});
+	it("回滚不删除被其他进程替换成不同 inode 的目标", async () => {
+		const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+		const cwd = tempDir(); const current = state(cwd); const file = current.planFile!; const original = file.path;
+		const target = planFilePath(cwd, "缓存验证", new Date(file.metadata.createdAt));
+		vi.spyOn(fs, "unlinkSync").mockImplementationOnce(() => {
+			actual.unlinkSync(target); fs.writeFileSync(target, "其他进程的文件"); throw new Error("原路径删除失败");
+		});
+		expect(renamePlanFile(cwd, file, PLAN)).toBe("failed");
+		expect(file.path).toBe(original); expect(fs.existsSync(original)).toBe(true);
+		expect(fs.readFileSync(target, "utf8")).toBe("其他进程的文件");
+	});
+	it("unlink 和回滚均失败时仍保留原路径，残留同内容链接可以恢复", () => {
+		const cwd = tempDir(); const current = state(cwd); const file = current.planFile!; const original = file.path;
+		vi.spyOn(fs, "unlinkSync").mockImplementationOnce(() => { throw new Error("失败"); }).mockImplementationOnce(() => { throw new Error("回滚失败"); });
+		expect(renamePlanFile(cwd, file, PLAN)).toBe("failed");
+		expect(file.path).toBe(original); expect(fs.existsSync(original)).toBe(true);
+		expect(fs.readdirSync(path.dirname(original))).toHaveLength(2);
+		expect(findActivePlan(cwd, "session-a")).toBeDefined();
 	});
 	it("文件名、标题和计划编号处理边界", () => {
 		expect(safeFileNamePart(".. /:*?\"<>| ")).toBe("plan");
