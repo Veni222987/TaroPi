@@ -31,7 +31,9 @@ afterEach(() => {
 
 interface NativeSelectorMethods {
 	showExtensionSelector(title: string, options: string[], opts?: DialogOptions): Promise<string | undefined>;
-	hideExtensionSelector(): void;
+	pushExtensionDialog(component: Component, blocked?: unknown): void;
+	removeExtensionDialog(component: Component): void;
+	showTopExtensionDialog(): void;
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean }): number;
 }
 const native = InteractiveMode.prototype as unknown as NativeSelectorMethods;
@@ -43,10 +45,13 @@ function nativeFixture() {
 		new KeybindingsManager(editorKeys) as unknown as AppKeybindingsManager);
 	editor.setText("未发送草稿");
 	const mode = {
-		editor, extensionSelector: undefined as ExtensionSelectorComponent | undefined, ui,
+		editor, ui, extensionDialogs: [] as { component: Component; blocked?: unknown }[],
+		get extensionSelector() { return this.extensionDialogs.at(-1)?.component as ExtensionSelectorComponent | undefined; },
 		programStatus: { setBlocked: vi.fn() }, editorContainer: { clear: vi.fn(), addChild: vi.fn() },
 		disposeActiveSelector: vi.fn(), toggleToolOutputExpansion: vi.fn(),
-		hideExtensionSelector: () => native.hideExtensionSelector.call(mode),
+		pushExtensionDialog: (component: Component, blocked?: unknown) => native.pushExtensionDialog.call(mode, component, blocked),
+		removeExtensionDialog: (component: Component) => native.removeExtensionDialog.call(mode, component),
+		showTopExtensionDialog: () => native.showTopExtensionDialog.call(mode),
 	};
 	const select = vi.fn((title: string, options: string[], opts?: DialogOptions) => native.showExtensionSelector.call(mode, title, options, opts));
 	const ctx = { hasUI: true, mode: "tui", ui: { select } } as unknown as ExtensionContext;

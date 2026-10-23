@@ -11,6 +11,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
 | 📋 Plan Workflow | `/plan 任务描述` — 会话级三态（idle / planning / implementing）：只读调研 → 工具内真实用户确认 → 实施；状态与正文保存在同一个 Markdown frontmatter，支持中断、恢复、自然语言退出与手动切模型 |
+| 🎛️ 工具行渲染 | 内置 `pi-compact-tools`，`/compact-tools` 切换 Compact / Claude / Codex / 原生样式，`/silent` 或 `Ctrl+'` 切换静默显示；只改界面，不改工具执行或模型上下文 |
 | 📦 会话归档 | `/archive` — 旧内容另存为可搜索恢复的新 id 会话，当前 id、路径和名称保留，上下文清空；活动 plan 自动终止，详见 [归档说明](archive/README.md) |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索（Brave/Exa/OpenAI）、URL 正文抓取、GitHub 仓库/文件、图片、本地 PDF 文本提取 |
@@ -70,6 +71,14 @@ Pi 原生 `SYSTEM.md`、`--system-prompt` 或其他扩展的强制完整提示�
 状态与正文一起写入 `.pi/taropi/plans/` 的 Markdown frontmatter，不另建状态 JSON，也不写会话 custom 条目。中断或恢复后保持阶段，等下一次输入继续；complete/exit 明确结束。旧计划文件不迁移。
 
 用户配置为 `getAgentDir()/plan.json`（默认 `~/.pi/agent/plan.json`），支持 planning/implementing/idle 各自的 model、blockedTools、prompt 覆盖；model=null 可关闭自动切换。详见 [Plan 工作流说明](plan/README.md)。
+
+### 工具行渲染（pi-compact-tools）
+
+core 入口直接注册 npm 依赖 `pi-compact-tools`，无需再单独安装其 Pi 扩展。默认 Compact 样式；`/compact-tools claude`、`/compact-tools codex` 或 `/compact-tools off` 可即时切换，`/compact-tools status` 查看生效设置。`/silent` 或 `Ctrl+'` 只隐藏显示，原记录和模型上下文不变；静默时也会隐藏部分错误／状态通知，需要排查时用 `/silent off`。
+
+沿用上游配置：全局 `~/.pi/agent/compact-tools.json`（遵循 `PI_CODING_AGENT_DIR`）和可信项目 `.pi/compact-tools.json`，不创建 TaroPi 专用配置、不自动切主题。若想保留某个工具原有渲染，可配置 `custom_tools.exclude`。这里只整合扩展，未额外暴露上游 `github-dark-pro` 主题资源。
+
+如果曾独立安装 `pi-compact-tools`，请在 `pi config` 中关闭那份扩展，避免重复注册命令、快捷键和渲染器。详见 [上游使用说明](https://github.com/nedleeds/pi-compact-tools)。
 
 ### 网络访问（`web-access/`）
 
