@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { register as registerSubAgents } from "./sub-agents/index.js";
 import registerPlan from "./plan/index.js";
+import registerArchive from "./archive/index.ts";
 import registerPermissions from "./permissions/index.js";
 import registerWebAccess from "./web-access/index.ts";
 import registerAskUserQuestion from "@juicesharp/rpiv-ask-user-question";
@@ -17,6 +18,7 @@ export default function registerTaroPi(pi: ExtensionAPI): void {
   // registerSubAgents(pi);
   registerAskUserQuestion(pi);
   registerPlan(pi);
+  registerArchive(pi);
   registerPermissions(pi);
   registerWebAccess(pi);
   registerModelAlias(pi);
