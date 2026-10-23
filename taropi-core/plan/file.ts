@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { localMinute, safeFileNamePart } from "../title/file-name.ts";
 import type { PlanDocument, PlanFile, PlanMetadata, PlanStatus, WorkflowState } from "./types.ts";
+
+export { safeFileNamePart } from "../title/file-name.ts";
 
 const PLAN_DIRECTORY = [".pi", "taropi", "plans"] as const;
 const SCHEMA = 1;
@@ -137,20 +140,9 @@ export function planTitle(planText: string): string {
 	return match?.[1]?.trim() || "plan";
 }
 
-// safeFileNamePart 清理 Markdown 标记和文件名非法字符，最多保留 20 个 Unicode 字符。
-export function safeFileNamePart(value: string, fallback = "plan"): string {
-	const firstLine = value.split(/\r\n?|\n/).find((line) => line.trim()) ?? "";
-	const normalized = firstLine.trim().replace(/^(?:#{1,6}\s*|[-*+]\s+|\d+[.)]\s+)/, "")
-		.replace(/^[`'"“”‘’]+|[`'"“”‘’]+$/g, "").replace(/[\\/:：*?"<>|\u0000-\u001f\u007f]/g, "")
-		.replace(/\s+/g, "-").replace(/-+/g, "-");
-	return Array.from(normalized.replace(/^[.\s-]+|[.\s-]+$/g, "")).slice(0, 20).join("").replace(/[.\s-]+$/g, "") || fallback;
-}
-
 // planFilePath 使用短标题和本地分钟生成确定性文件名，创建和改名均拒绝覆盖。
 export function planFilePath(cwd: string, title: string, date: Date): string {
-	const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes()];
-	const timestamp = parts.map((part, index) => String(part).padStart(index === 0 ? 4 : 2, "0")).join("-");
-	return path.resolve(cwd, ...PLAN_DIRECTORY, `${safeFileNamePart(title)}-${timestamp}.md`);
+	return path.resolve(cwd, ...PLAN_DIRECTORY, `${safeFileNamePart(title)}-${localMinute(date)}.md`);
 }
 
 function readMetadata(content: string): PlanMetadata | undefined {

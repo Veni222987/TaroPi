@@ -73,6 +73,7 @@ frontmatter 值按 JSON 字符串、数字和布尔序列化为合法 YAML，正
 - 主输入框完全沿用当前编辑器：多行／图片粘贴、光标移动、撤销、历史、补全和外部编辑器不再由 plan 仿制。原生选择框使用 tui.select.* 快捷键，选“补充内容”后才进行输入。
 - 确认真正收到中断信号时，Pi 本身可能显示 Operation aborted；这不表示 plan 失败或退出。过期会话的决策被忽略，不中断新会话。
 - 恢复只还原阶段、工具策略和 HUD，并提示一次，不自动发模型请求；下一次用户输入沿原阶段继续。
+- `/archive` 或其他方式重建同 id 会话后，若当前 header.timestamp 晚于活动 plan.createdAt，plan 自行标记 exited、清除 pendingLaunch 并保持 idle，正文保留。保存失败时告警且当前仍保持 idle；系统时钟回拨可能漏判。
 - 确认后若在实施提示送达前退出，pendingLaunch=true；恢复后的下一条输入合并一次实施规则、完整计划与用户输入。之后普通输入不再拼接规则。
 - 未确认计划依赖 Pi 会话历史恢复调研上下文；Markdown 保留原始任务和最近提交正文。实施中断后先检查已有副作用，不能盲目重放工具。
 - 不迁移旧 `plan-workflow` 会话条目。fork/clone 的 sessionId 不同，不继承活动状态；同一 sessionId 的 tree 分支共享会话级检查点。
@@ -113,7 +114,7 @@ frontmatter 值按 JSON 字符串、数字和布尔序列化为合法 YAML，正
 - workflow：会话检查点、流转、异步启动与过期回调防护。
 - types / config / prompts：类型、独立阶段配置和一次性规则。
 - file：Markdown 元数据、确定性文件名、排他发布／改名、原子正文写入和扫描恢复。
-- runtime / title：阶段默认模型解析、只读会话文本提取、独立标题概括与取消/失败降级。
+- runtime / title：阶段默认模型解析和 plan 标题封装；只读会话文本提取、独立标题请求与文件名清理复用公共 title 模块。
 - tool / tui：模型工具契约及原生选择交互，补充回主输入框。
 
 临时体验（在仓库根目录执行，避免重复加载安装版扩展）：

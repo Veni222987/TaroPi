@@ -36,7 +36,7 @@ function setup() {
 	const input = vi.fn(async () => "补充边界" as string | undefined);
 	const compact = vi.fn<(options?: CompactOptions) => void>();
 	const ctx = { cwd, mode: "rpc", hasUI: true, ui: { notify, select, input }, abort: vi.fn(),
-		sessionManager: { getSessionId: () => "session-a" }, compact, waitForIdle: vi.fn(async () => undefined),
+		sessionManager: { getSessionId: () => "session-a", getHeader: () => null }, compact, waitForIdle: vi.fn(async () => undefined),
 		isIdle: () => true, hasPendingMessages: () => false,
 	} as unknown as ExtensionCommandContext;
 	const workflow = new PlanWorkflow(pi, vi.fn());
@@ -47,6 +47,29 @@ async function drain(): Promise<void> { await Promise.resolve(); await Promise.r
 const userInput = (text: string): InputEvent => ({ type: "input", source: "interactive", text });
 
 describe("Plan 注册与三态流转", () => {
+	it.each([false, true])("会话重建后活动 plan 终止，待启动：%s", async (pending) => {
+		const f = setup(); await f.workflow.enter("重建前计划", f.ctx);
+		if (pending) await f.workflow.dispatch({ action: "submit", text: PLAN }, f.ctx);
+		const file = f.workflow.state.planFile!;
+		const header = { type: "session", id: "session-a", timestamp: new Date(Date.parse(file.metadata.createdAt) + 1000).toISOString() };
+		const ctx = { ...f.ctx, sessionManager: { ...f.ctx.sessionManager, getHeader: () => header } } as ExtensionCommandContext;
+		f.workflow.restore(ctx);
+		expect(f.workflow.state.phase).toBe("idle"); expect(findActivePlan(f.cwd, "session-a")).toBeUndefined();
+		expect(fs.readFileSync(file.path, "utf8")).toContain('status: "exited"');
+		expect(fs.readFileSync(file.path, "utf8")).toContain("pendingLaunch: false");
+		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("活动 plan 已终止"), "info");
+		f.workflow.restore(ctx); expect(f.workflow.state.phase).toBe("idle");
+	});
+	it("退出状态保存失败仍保持 idle，损坏时间不终止正常计划", async () => {
+		const f = setup(); await f.workflow.enter("保留计划", f.ctx);
+		const file = f.workflow.state.planFile!;
+		const ctx = { ...f.ctx, sessionManager: { ...f.ctx.sessionManager, getHeader: () => ({ timestamp: "invalid" }) } } as ExtensionCommandContext;
+		f.workflow.restore(ctx); expect(f.workflow.state.phase).toBe("planning");
+		ctx.sessionManager.getHeader = () => ({ timestamp: new Date(Date.parse(file.metadata.createdAt) + 1000).toISOString() }) as ReturnType<ExtensionContext["sessionManager"]["getHeader"]>;
+		vi.spyOn(fileModule, "savePlanFile").mockReturnValueOnce(false);
+		f.workflow.restore(ctx); expect(f.workflow.state.phase).toBe("idle");
+		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("保存失败"), "warning");
+	});
 	it("工具声明固定，只有 /plan 命令能进入，禁止上下文注入和会话存状态", () => {
 		const { api } = setup(); registerPlan(api as unknown as ExtensionAPI);
 		expect(api.registerCommand.mock.calls[0]?.[0]).toBe("plan");

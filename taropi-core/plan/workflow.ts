@@ -30,6 +30,14 @@ export class PlanWorkflow {
 			task: document.file.metadata.task, planText: document.planText, planFile: document.file,
 			adjustmentRounds: document.file.metadata.adjustmentRounds, pendingLaunch: document.file.metadata.pendingLaunch,
 		} : idleState();
+		if (document && Date.parse(ctx.sessionManager.getHeader()?.timestamp ?? "") > Date.parse(document.file.metadata.createdAt)) {
+			this.state.pendingLaunch = false;
+			const saved = savePlanFile(this.state, "exited", "会话已归档或重建，plan 自动终止");
+			this.state = idleState();
+			this.render();
+			ctx.ui.notify(saved ? "会话已归档或重建，活动 plan 已终止" : "会话已重建，plan 保持 idle，但退出状态保存失败，请检查计划文件权限", saved ? "info" : "warning");
+			return;
+		}
 		this.render();
 		if (document) ctx.ui.notify(`已恢复 plan：${this.state.phase === "planning" ? "计划中" : "实施中"}，输入任意内容继续`, "info");
 	}
