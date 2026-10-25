@@ -7,7 +7,6 @@
   ],
   "workspaces": [
     "taropi-core",
-    "taropi-draw",
     "taropi-hud"
   ],
   "scripts": {
@@ -18,11 +17,7 @@
   },
   "pi": {
     "extensions": [
-      "./taropi-core/index.ts",
-      "./taropi-draw/index.ts"
-    ],
-    "prompts": [
-      "./taropi-draw/prompts"
+      "./taropi-core/index.ts"
     ],
     "skills": [
       "./taropi-plain/skills"

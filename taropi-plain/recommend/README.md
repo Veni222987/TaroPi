@@ -145,20 +145,3 @@ cp taropi-plain/recommend/keybindings.json ~/.pi/agent/keybindings.json
 ```
 
 然后在 pi 中执行 `/reload` 即可生效，无需重启 session。
-
-## 环境变量
-
-将以下内容追加到 `~/.bashrc`（或 `~/.zshrc`），然后重启 pi 生效：
-
-```bash
-# taropi-draw：AI 生图（必填）
-export TAROPI_DRAW_KEY=sk-...
-
-# taropi-draw：API 代理地址（可选，默认 https://api.openai.com/v1）
-export TAROPI_DRAW_URL=https://your-proxy/v1
-```
-
-| 变量 | 插件 | 是否必填 | 说明 |
-|------|------|----------|------|
-| `TAROPI_DRAW_KEY` | taropi-draw | 必填 | API Key，用于调用 gpt-image-2 生成架构图 |
-| `TAROPI_DRAW_URL` | taropi-draw | 可选 | API 代理地址；不填则直连 `https://api.openai.com/v1` |

@@ -27,7 +27,7 @@ async function fixture(shutdownWrites = false) {
 			const title = JSON.stringify(context.messages[0]).includes("为这段会话概括");
 			(title ? titles : requests).push(structuredClone(context.messages));
 			const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
-				content: [{ type: "text", text: title ? "修复归档命令" : "收到" }], stopReason: "stop", timestamp: Date.now(),
+				content: [{ type: "text", text: title ? (titles.length === 1 ? "修复归档命令" : "接入工具行渲染") : "收到" }], stopReason: "stop", timestamp: Date.now(),
 				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 			const stream = createAssistantMessageEventStream();
 			if (!title && JSON.stringify(context.messages.at(-1)).includes("挂起请求")) {
@@ -67,6 +67,23 @@ async function fixture(shutdownWrites = false) {
 }
 
 describe("真实 AgentSessionRuntime 归档回归（mock provider）", () => {
+	it("同一命名会话多次归档，各自概括当次活动，列表显示不同名称", async () => {
+		const f = await fixture();
+		try {
+			await f.runtime.session.prompt("修复文件归档");
+			f.runtime.session.sessionManager.appendSessionInfo("QQ开发套件甜菜");
+			await f.runtime.session.prompt("/archive");
+			await f.runtime.session.prompt("接入工具行渲染");
+			await f.runtime.session.prompt("/archive");
+			const listed = await SessionManager.list(f.cwd, f.sessionDir);
+			expect(listed.map((item) => item.name).sort()).toEqual(["QQ开发套件甜菜", "QQ开发套件甜菜-修复归档命令-archived", "QQ开发套件甜菜-接入工具行渲染-archived"].sort());
+			expect(new Set(listed.map((item) => item.id)).size).toBe(3);
+			expect(f.titles).toHaveLength(2);
+			expect(JSON.stringify(f.titles[1])).toContain("接入工具行渲染");
+			expect(JSON.stringify(f.titles[1])).not.toContain("修复文件归档");
+			expect(f.runtime.session.messages).toEqual([]); expect(f.errors).toEqual([]);
+		} finally { await f.runtime.dispose(); }
+	}, 15000);
 	it("归档中止正在生成的回复，排队消息不进入新会话", async () => {
 		const f = await fixture();
 		try {
@@ -79,7 +96,7 @@ describe("真实 AgentSessionRuntime 归档回归（mock provider）", () => {
 			expect(f.runtime.session.messages).toEqual([]);
 			expect(f.runtime.session.pendingMessageCount).toBe(0); expect(f.requests).toHaveLength(1);
 			const files = await SessionManager.list(f.cwd, f.sessionDir);
-			const archived = files.find((item) => item.name?.endsWith("(archived)"))!;
+			const archived = files.find((item) => item.name?.endsWith("-archived"))!;
 			expect(fs.readFileSync(archived.path, "utf8")).toContain('"stopReason":"aborted"');
 			expect(f.errors).toEqual([]);
 		} finally { await f.runtime.dispose(); }
@@ -101,7 +118,7 @@ describe("真实 AgentSessionRuntime 归档回归（mock provider）", () => {
 			const listed = await SessionManager.list(f.cwd, f.sessionDir);
 			expect(listed).toHaveLength(2); expect(new Set(listed.map((item) => item.id)).size).toBe(2);
 			const archived = listed.find((item) => item.id !== id)!;
-			expect(archived.name).toBe("修复归档命令 (archived)"); expect(path.basename(archived.path)).toMatch(/^修复归档命令-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.jsonl$/);
+			expect(archived.name).toBe("持续工作-修复归档命令-archived"); expect(path.basename(archived.path)).toMatch(/^持续工作-修复归档命令-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.jsonl$/);
 			expect(SessionManager.open(archived.path).buildSessionContext().messages).toEqual(before);
 			expect(f.titles).toHaveLength(1); expect(JSON.stringify(f.titles[0])).toContain("旧需求二");
 			expect(fs.readFileSync(file, "utf8")).not.toContain("不应带入新会话");

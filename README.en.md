@@ -10,11 +10,9 @@ A personal collection of [pi coding agent](https://pi.dev) extensions (monorepo)
 flowchart LR
   PI[pi coding agent]
   CORE[taropi-core\ncore extension]
-  DRAW[taropi-draw\ndiagram generation extension]
   PLAIN[taropi-plain\nsystem prompt, agents, and skills]
 
   PI --> CORE
-  PI --> DRAW
   PI --> PLAIN
   CORE -.loads bundled agent definitions.-> PLAIN
 ```
@@ -46,7 +44,6 @@ Run `/reload` or restart pi after installation.
 | Package | Description |
 |---------|-------------|
 | `taropi-core` | Core: subagent tools, permission control, Chinese response, web access, etc. |
-| `taropi-draw` | AI image generation: generate professional architecture diagrams (PNG) from sketches or descriptions |
 | `taropi-plain` | Plain-text resources: append system prompt, subagent definitions, skills, and recommended configuration |
 
 

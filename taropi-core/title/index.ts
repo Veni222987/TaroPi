@@ -9,13 +9,13 @@ export interface TitleOptions {
 	prompt: string;
 	dialogTitle: string;
 	cancelLabel?: string;
-	fallback: string;
+	fallback?: string;
 	defaultTitle?: string;
 	taskLabel?: string;
 	resolveModel?: () => ExtensionContext["model"];
 }
 
-// generateTitle 用独立辅助请求概括短标题，失败回退，用户取消则不创建文件。
+// generateTitle 用独立辅助请求概括短标题，失败时仅使用显式回退值，未配置或取消则不生成标题。
 export async function generateTitle(task: string, ctx: ExtensionContext, options: TitleOptions, signal: AbortSignal): Promise<string | undefined> {
 	if (signal.aborted) return undefined;
 	const cancellation = new AbortController();
@@ -79,7 +79,11 @@ async function requestTitle(task: string, ctx: ExtensionContext, options: TitleO
 		});
 		let input = task;
 		try { input = titleInput(task, ctx.sessionManager.getBranch(), options.taskLabel); }
-		catch { ctx.ui.notify("标题上下文读取失败，仅使用当前任务概括", "warning"); }
+		catch {
+			if (options.fallback === undefined) throw new Error("标题上下文读取失败");
+			ctx.ui.notify("标题上下文读取失败，仅使用当前任务概括", "warning");
+		}
+		if (options.fallback === undefined && input === task) throw new Error("会话没有可概括的文本");
 		const response = await Promise.race([ctx.modelRegistry.streamSimple(model, {
 			systemPrompt: options.prompt,
 			messages: [{ role: "user", content: [{ type: "text", text: input }], timestamp: Date.now() }],
@@ -92,7 +96,12 @@ async function requestTitle(task: string, ctx: ExtensionContext, options: TitleO
 		return title;
 	} catch (error) {
 		if (signal.aborted) return undefined;
-		ctx.ui.notify(`短标题概括失败，使用回退标题：${error instanceof Error ? error.message : String(error)}`, "warning");
+		const message = error instanceof Error ? error.message : String(error);
+		if (options.fallback === undefined) {
+			ctx.ui.notify(`短标题概括失败，未生成标题：${message}`, "warning");
+			return undefined;
+		}
+		ctx.ui.notify(`短标题概括失败，使用回退标题：${message}`, "warning");
 		return safeFileNamePart(options.fallback, options.defaultTitle ?? "session");
 	} finally {
 		clearTimeout(timer);

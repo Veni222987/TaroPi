@@ -39,15 +39,21 @@ describe("/archive 命令", () => {
 		expect(f.ctx.abort).not.toHaveBeenCalled(); expect(generateTitle).not.toHaveBeenCalled();
 		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("无可归档内容"), "info");
 	});
-	it.each([["原名称", "原名称"], ["/:*?", "首条需求"], ["", "首条需求"]])("标题失败的回退输入：%s → %s", async (name, expected) => {
+	it.each([["原名称", "原名称-归档任务-archived"], ["", "归档任务-archived"], ["  ", "归档任务-archived"]])("会话名 %j 与活动概括组合为 %s，不配置原名回退", async (name, expected) => {
 		const f = fixture(); f.manager.appendSessionInfo(name); await f.run();
-		expect(vi.mocked(generateTitle).mock.calls[0]![2]).toMatchObject({ fallback: expected, defaultTitle: "session" });
+		const options = vi.mocked(generateTitle).mock.calls[0]![2];
+		expect(options.fallback).toBeUndefined(); expect(options.prompt).toContain("不要用会话名");
+		const archived = (await SessionManager.list(f.cwd, f.cwd)).find((item) => item.id !== f.manager.getSessionId())!;
+		expect(archived.name).toBe(expected);
+		expect(path.basename(archived.path)).toMatch(new RegExp(`^${expected}-\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}\\.jsonl$`));
 	});
 	it("UI 取消不改文件，标题取消只中止任务不改文件", async () => {
 		const f = fixture(); const before = fs.readFileSync(f.file!, "utf8"); f.confirm.mockResolvedValueOnce(false);
 		await f.run(); expect(f.ctx.abort).not.toHaveBeenCalled();
 		vi.mocked(generateTitle).mockResolvedValueOnce(undefined); await f.run();
 		expect(fs.readFileSync(f.file!, "utf8")).toBe(before); expect(f.ctx.switchSession).not.toHaveBeenCalled();
+		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("未生成活动概括"), "info");
+		expect(fs.readdirSync(f.cwd)).toEqual([path.basename(f.file!)]);
 	});
 	it("按 abort → idle → title → 归档 → switch 顺序执行且成功后只用新 ctx", async () => {
 		const f = fixture();

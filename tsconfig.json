@@ -23,6 +23,6 @@
       "taropi-hud/protocol": ["./taropi-hud/protocol.ts"]
     }
   },
-  "include": ["taropi-core/**/*.ts", "taropi-draw/**/*.ts", "taropi-hud/**/*.ts"],
+  "include": ["taropi-core/**/*.ts", "taropi-hud/**/*.ts"],
   "exclude": ["node_modules", "dist", ".trash"]
 }

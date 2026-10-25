@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { archiveFilePath, archiveSessionFile, renderArchivedSession, renderEmptySession, replaceAtomic, restoreSessionFile, writeExclusive } from "./file.ts";
+import { archiveFilePath, archiveSessionName, archiveSessionFile, renderArchivedSession, renderEmptySession, replaceAtomic, restoreSessionFile, writeExclusive } from "./file.ts";
 
 vi.mock("node:fs", async (original) => ({ ...await original<typeof fs>() }));
 const directories: string[] = [];
@@ -21,6 +21,15 @@ describe("归档文件", () => {
 		expect(path.basename(archiveFilePath("/tmp", "鹅".repeat(30), new Date()))).toMatch(new RegExp(`^${"鹅".repeat(20)}-archived-`));
 		expect(path.basename(archiveFilePath("/tmp", "../:*", new Date()))).toMatch(/^session-archived-/);
 		expect(() => archiveFilePath("/tmp", "任务", new Date("bad"))).toThrow("时间无效");
+	});
+	it.each([["持续工作", "持续工作-修复归档-archived"], [undefined, "修复归档-archived"], ["  ", "修复归档-archived"]])("显示名称保留原名 %j 和活动概括", (name, expected) => {
+		expect(archiveSessionName("修复归档", name)).toBe(expected);
+		expect(path.basename(archiveFilePath("/tmp", "修复归档", new Date(2026, 9, 23, 20, 45), name))).toBe(`${expected}-2026-10-23-20-45.jsonl`);
+	});
+	it("长会话名不挤掉活动概括，文件名分别清理和截断两部分", () => {
+		const name = "鹅".repeat(30);
+		expect(archiveSessionName("活动概括", name)).toBe(`${name}-活动概括-archived`);
+		expect(path.basename(archiveFilePath("/tmp", "活动概括", new Date(2026, 9, 23, 20, 45), `## ${name}/:*?`))).toBe(`${"鹅".repeat(20)}-活动概括-archived-2026-10-23-20-45.jsonl`);
 	});
 	it.each([undefined, "原会话名"])("空会话保留身份、cwd、parentSession 和名称 %s，无消息", (name) => {
 		const f = fixture();
@@ -40,7 +49,7 @@ describe("归档文件", () => {
 		const content = fs.readFileSync(manager.getSessionFile()!, "utf8");
 		fs.writeFileSync(f.archived, renderArchivedSession(content, "archive-id", "修复标题", manager.getLeafId()));
 		const archived = SessionManager.open(f.archived);
-		expect(archived.getSessionId()).toBe("archive-id"); expect(archived.getSessionName()).toBe("修复标题 (archived)");
+		expect(archived.getSessionId()).toBe("archive-id"); expect(archived.getSessionName()).toBe("修复标题-archived");
 		expect(archived.buildSessionContext().messages).toEqual(manager.buildSessionContext().messages);
 		expect(fs.readFileSync(f.archived, "utf8").split("\n").slice(1, -2)).toEqual(content.trimEnd().split("\n").slice(1));
 	});
