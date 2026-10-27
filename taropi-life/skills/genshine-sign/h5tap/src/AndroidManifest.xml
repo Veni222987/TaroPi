@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.h5tap">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+    <application>
+        <service android:name=".TapService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/tap_config"/>
+        </service>
+        <receiver android:name=".CmdReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="local.h5tap.CMD"/>
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

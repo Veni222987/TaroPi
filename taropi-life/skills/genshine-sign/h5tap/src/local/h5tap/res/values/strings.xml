@@ -1,0 +1,4 @@
+<resources>
+    <string name="accessibility_service_label">H5 Tap</string>
+    <string name="accessibility_service_description">Lets the connected computer tap inside app web pages.</string>
+</resources>

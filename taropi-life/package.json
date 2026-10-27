@@ -1,0 +1,10 @@
+{
+  "name": "taropi-life",
+  "version": "0.1.0",
+  "private": true,
+  "description": "生活向的 pi skill，例如原神每日签到",
+  "keywords": ["pi-package"],
+  "pi": {
+    "skills": ["./skills"]
+  }
+}
