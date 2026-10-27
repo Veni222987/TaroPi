@@ -4,60 +4,18 @@ import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.graphics.Path;
 import android.graphics.Rect;
-import android.os.Bundle;
 import android.view.accessibility.AccessibilityNodeInfo;
-import java.io.File;
-import java.io.FileWriter;
-import java.util.ArrayList;
 import java.util.List;
 
 public class TapService extends AccessibilityService {
     private static TapService instance;
 
-    private volatile boolean running;
-
     @Override public void onServiceConnected() {
         instance = this;
-        running = true;
-        new Thread(new Poller(this)).start();
     }
 
     @Override public void onDestroy() {
-        running = false;
         if (instance == this) instance = null;
-    }
-
-    public boolean isRunning() { return running; }
-
-    public void poll() {
-        java.io.File cmd = new java.io.File(getExternalFilesDir(null), "h5tap.cmd");
-        if (!cmd.exists()) return;
-        String line;
-        try {
-            java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(cmd));
-            line = reader.readLine();
-            reader.close();
-            cmd.delete();
-        } catch (Exception e) {
-            return;
-        }
-        if (line == null) return;
-        String result;
-        if (line.startsWith("tap ")) {
-            String[] parts = line.split(" ");
-            result = tap(Integer.parseInt(parts[1]), Integer.parseInt(parts[2])) ? "TAP_OK" : "TAP_FAIL";
-        } else if (line.startsWith("click ")) {
-            result = "CLICKED " + clickText(line.substring(6));
-        } else if (line.equals("dump")) {
-            result = dump();
-        } else {
-            result = "UNKNOWN";
-        }
-        try {
-            java.io.FileOutputStream out = new java.io.FileOutputStream(new java.io.File(getExternalFilesDir(null), "h5tap.out"));
-            out.write(result.getBytes("UTF-8"));
-            out.close();
-        } catch (Exception ignored) {}
     }
 
     @Override public void onAccessibilityEvent(android.view.accessibility.AccessibilityEvent e) {}
