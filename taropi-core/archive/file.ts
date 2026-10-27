@@ -4,20 +4,29 @@ import * as path from "node:path";
 import { CURRENT_SESSION_VERSION, type SessionHeader, type SessionInfoEntry } from "@earendil-works/pi-coding-agent";
 import { localMinute, safeFileNamePart } from "../title/file-name.ts";
 
-// archiveFilePath 生成同目录可检索的归档路径，同分钟同名由排他写入拒绝。
-export function archiveFilePath(directory: string, title: string, date: Date, name?: string): string {
-	const prefix = name?.trim() ? `${safeFileNamePart(name, "session")}-` : "";
-	return path.resolve(directory, `${prefix}${safeFileNamePart(title, "session")}-archived-${localMinute(date)}.jsonl`);
+const ARCHIVE_LABEL_LIMIT = 30;
+
+// archiveLabel 用规则清理归档标签，命名会话用会话名，未命名会话用首条可见文本。
+export function archiveLabel(name: string | undefined, source: string): string {
+	return safeFileNamePart(name?.trim() ? name : source, "session", ARCHIVE_LABEL_LIMIT);
 }
 
-// archiveSessionName 拼接原会话名与活动概括，未命名会话仅显示活动概括和归档标记。
-export function archiveSessionName(title: string, name?: string): string {
-	const prefix = name?.trim() ? `${name.trim()}-` : "";
-	return `${prefix}${safeFileNamePart(title, "session")}-archived`;
+// archiveFilePath 生成同目录可检索的归档路径，同一分钟重复时追加序号。
+export function archiveFilePath(directory: string, label: string, date: Date): string {
+	const base = `${safeFileNamePart(label, "session", ARCHIVE_LABEL_LIMIT)}-archived-${localMinute(date)}`;
+	for (let index = 1; ; index++) {
+		const file = path.resolve(directory, `${base}${index === 1 ? "" : `-${index}`}.jsonl`);
+		if (!fs.existsSync(file)) return file;
+	}
+}
+
+// archiveSessionName 用归档标签和归档标记组成显示名称。
+export function archiveSessionName(label: string): string {
+	return `${safeFileNamePart(label, "session", ARCHIVE_LABEL_LIMIT)}-archived`;
 }
 
 // renderArchivedSession 只更换会话身份并追加名称，原条目及其分支关系保持不变。
-export function renderArchivedSession(content: string, newId: string, title: string, leafId?: string | null, name?: string): string {
+export function renderArchivedSession(content: string, newId: string, label: string, leafId?: string | null): string {
 	const separator = content.indexOf("\n");
 	const firstLine = separator < 0 ? content : content.slice(0, separator);
 	const rest = separator < 0 ? "" : content.slice(separator + 1);
@@ -31,7 +40,7 @@ export function renderArchivedSession(content: string, newId: string, title: str
 		lastId = entry.id;
 	}
 	const body = rest && !rest.endsWith("\n") ? `${rest}\n` : rest;
-	return `${JSON.stringify({ ...header, id: newId })}\n${body}${JSON.stringify(sessionInfo(archiveSessionName(title, name), leafId === undefined ? lastId : leafId))}\n`;
+	return `${JSON.stringify({ ...header, id: newId })}\n${body}${JSON.stringify(sessionInfo(archiveSessionName(label), leafId === undefined ? lastId : leafId))}\n`;
 }
 
 // renderEmptySession 保留基本信息，重建无消息的当前会话。

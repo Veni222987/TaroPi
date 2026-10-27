@@ -2,16 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generateTitle } from "../title/index.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as files from "./file.ts";
 import registerArchive from "./index.ts";
 
-vi.mock("../title/index.ts", () => ({ generateTitle: vi.fn() }));
 type ReplacedSessionContext = Parameters<NonNullable<NonNullable<Parameters<ExtensionCommandContext["switchSession"]>[1]>["withSession"]>>[0];
 const directories: string[] = [];
-beforeEach(() => vi.mocked(generateTitle).mockResolvedValue("归档任务"));
-afterEach(() => { vi.restoreAllMocks(); vi.mocked(generateTitle).mockReset(); for (const dir of directories.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); for (const dir of directories.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 function fixture(persist = true, conversation = true) {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "archive-command-")); directories.push(cwd);
 	const manager = persist ? SessionManager.create(cwd, cwd) : SessionManager.inMemory(cwd);
@@ -36,31 +33,36 @@ function fixture(persist = true, conversation = true) {
 describe("/archive 命令", () => {
 	it.each([[false, true], [true, false]])("不归档未持久化或未落盘的会话 %s/%s", async (persist, conversation) => {
 		const f = fixture(persist, conversation); await f.run();
-		expect(f.ctx.abort).not.toHaveBeenCalled(); expect(generateTitle).not.toHaveBeenCalled();
+		expect(f.ctx.abort).not.toHaveBeenCalled();
 		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("无可归档内容"), "info");
 	});
-	it.each([["原名称", "原名称-归档任务-archived"], ["", "归档任务-archived"], ["  ", "归档任务-archived"]])("会话名 %j 与活动概括组合为 %s，不配置原名回退", async (name, expected) => {
+	it.each([["原名称", "原名称-archived"], ["", "首条需求-archived"], ["  ", "首条需求-archived"]])("会话名 %j 按规则归档为 %s", async (name, expected) => {
 		const f = fixture(); f.manager.appendSessionInfo(name); await f.run();
-		const options = vi.mocked(generateTitle).mock.calls[0]![2];
-		expect(options.fallback).toBeUndefined(); expect(options.prompt).toContain("不要用会话名");
 		const archived = (await SessionManager.list(f.cwd, f.cwd)).find((item) => item.id !== f.manager.getSessionId())!;
 		expect(archived.name).toBe(expected);
 		expect(path.basename(archived.path)).toMatch(new RegExp(`^${expected}-\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}\\.jsonl$`));
 	});
-	it("UI 取消不改文件，标题取消只中止任务不改文件", async () => {
+	it("未命名会话取首条用户文本前 30 字，没有文本时用 session", async () => {
+		const f = fixture(true, false);
+		f.manager.appendMessage({ role: "user", content: `  ${"鹅".repeat(40)} 继续`, timestamp: 1 });
+		f.manager.appendSessionInfo(""); await f.run();
+		const archived = (await SessionManager.list(f.cwd, f.cwd)).find((item) => item.id !== f.manager.getSessionId())!;
+		expect(archived.name).toBe(`${"鹅".repeat(30)}-archived`);
+		const empty = fixture(true, false); empty.manager.appendMessage({ role: "assistant", content: "没有用户文本", timestamp: 1 }); empty.manager.appendSessionInfo(""); await empty.run();
+		const fallback = (await SessionManager.list(empty.cwd, empty.cwd)).find((item) => item.id !== empty.manager.getSessionId())!;
+		expect(fallback.name).toBe("session-archived");
+	});
+	it("UI 取消不改文件", async () => {
 		const f = fixture(); const before = fs.readFileSync(f.file!, "utf8"); f.confirm.mockResolvedValueOnce(false);
 		await f.run(); expect(f.ctx.abort).not.toHaveBeenCalled();
-		vi.mocked(generateTitle).mockResolvedValueOnce(undefined); await f.run();
 		expect(fs.readFileSync(f.file!, "utf8")).toBe(before); expect(f.ctx.switchSession).not.toHaveBeenCalled();
-		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("未生成活动概括"), "info");
 		expect(fs.readdirSync(f.cwd)).toEqual([path.basename(f.file!)]);
 	});
-	it("按 abort → idle → title → 归档 → switch 顺序执行且成功后只用新 ctx", async () => {
+	it("按 abort → idle → 归档 → switch 顺序执行且成功后只用新 ctx", async () => {
 		const f = fixture();
-		vi.mocked(generateTitle).mockImplementationOnce(async () => { f.calls.push("title"); return "归档任务"; });
 		const original = files.archiveSessionFile;
 		vi.spyOn(files, "archiveSessionFile").mockImplementation((...args) => { f.calls.push("archive"); original(...args); });
-		await f.run(); expect(f.calls).toEqual(["abort", "idle", "title", "archive", "switch"]);
+		await f.run(); expect(f.calls).toEqual(["abort", "idle", "archive", "switch"]);
 		expect(f.ctx.isIdle).not.toHaveBeenCalled();
 		const fresh = SessionManager.open(f.file!);
 		expect(fresh.getSessionId()).toBe(f.manager.getSessionId()); expect(fresh.getSessionName()).toBe("原会话名称");
@@ -120,13 +122,13 @@ describe("/archive 命令", () => {
 		await f.run(); expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("文件校验失败"), "error");
 		expect(fs.readdirSync(f.cwd).filter((file) => file.includes("archived"))).toHaveLength(1);
 	});
-	it("重复入口不重复请求，shutdown 取消等待中的标题", async () => {
-		const f = fixture(); let finish: ((title: string) => void) | undefined;
-		vi.mocked(generateTitle).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+	it("重复入口不并发归档，shutdown 取消等待中的确认", async () => {
+		const f = fixture(); let finish: ((value: boolean) => void) | undefined;
+		f.confirm.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
 		const pending = f.run();
 		while (!finish) await Promise.resolve();
-		await f.run(); expect(generateTitle).toHaveBeenCalledTimes(1);
+		await f.run(); expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("正在归档"), "warning");
 		const shutdown = f.api.on.mock.calls.find(([event]) => event === "session_shutdown")![1]; shutdown();
-		finish("旧标题"); await pending; expect(f.ctx.switchSession).not.toHaveBeenCalled();
+		finish(false); await pending; expect(f.ctx.switchSession).not.toHaveBeenCalled();
 	});
 });

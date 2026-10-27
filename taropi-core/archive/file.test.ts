@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { archiveFilePath, archiveSessionName, archiveSessionFile, renderArchivedSession, renderEmptySession, replaceAtomic, restoreSessionFile, writeExclusive } from "./file.ts";
+import { archiveFilePath, archiveLabel, archiveSessionName, archiveSessionFile, renderArchivedSession, renderEmptySession, replaceAtomic, restoreSessionFile, writeExclusive } from "./file.ts";
 
 vi.mock("node:fs", async (original) => ({ ...await original<typeof fs>() }));
 const directories: string[] = [];
@@ -16,20 +16,23 @@ function fixture() {
 }
 
 describe("归档文件", () => {
-	it("本机分钟、Unicode 截断及非法字符，时间无效时拒绝", () => {
-		expect(path.basename(archiveFilePath("/tmp", "## 修复/标题", new Date(2026, 9, 23, 20, 45)))).toBe("修复标题-archived-2026-10-23-20-45.jsonl");
-		expect(path.basename(archiveFilePath("/tmp", "鹅".repeat(30), new Date()))).toMatch(new RegExp(`^${"鹅".repeat(20)}-archived-`));
-		expect(path.basename(archiveFilePath("/tmp", "../:*", new Date()))).toMatch(/^session-archived-/);
+	it("本机分钟、30 字截断及非法字符，时间无效时拒绝", () => {
+		expect(archiveLabel(undefined, "## 修复/标题")).toBe("修复标题");
+		expect(path.basename(archiveFilePath("/tmp", archiveLabel(undefined, "## 修复/标题"), new Date(2026, 9, 23, 20, 45)))).toBe("修复标题-archived-2026-10-23-20-45.jsonl");
+		expect(archiveLabel(undefined, "鹅".repeat(40))).toBe("鹅".repeat(30));
+		expect(archiveLabel("  ", "首条指令")).toBe("首条指令");
+		expect(archiveLabel("../:*", "首条指令")).toBe("session");
 		expect(() => archiveFilePath("/tmp", "任务", new Date("bad"))).toThrow("时间无效");
 	});
-	it.each([["持续工作", "持续工作-修复归档-archived"], [undefined, "修复归档-archived"], ["  ", "修复归档-archived"]])("显示名称保留原名 %j 和活动概括", (name, expected) => {
-		expect(archiveSessionName("修复归档", name)).toBe(expected);
-		expect(path.basename(archiveFilePath("/tmp", "修复归档", new Date(2026, 9, 23, 20, 45), name))).toBe(`${expected}-2026-10-23-20-45.jsonl`);
+	it.each([["持续工作", "持续工作-archived"], [undefined, "修复归档-archived"], ["  ", "修复归档-archived"]])("显示名称使用会话名或首条文本 %j", (name, expected) => {
+		const label = archiveLabel(name, "修复归档");
+		expect(archiveSessionName(label)).toBe(expected);
+		expect(path.basename(archiveFilePath("/tmp", label, new Date(2026, 9, 23, 20, 45)))).toBe(`${expected}-2026-10-23-20-45.jsonl`);
 	});
-	it("长会话名不挤掉活动概括，文件名分别清理和截断两部分", () => {
-		const name = "鹅".repeat(30);
-		expect(archiveSessionName("活动概括", name)).toBe(`${name}-活动概括-archived`);
-		expect(path.basename(archiveFilePath("/tmp", "活动概括", new Date(2026, 9, 23, 20, 45), `## ${name}/:*?`))).toBe(`${"鹅".repeat(20)}-活动概括-archived-2026-10-23-20-45.jsonl`);
+	it("命名会话只用会话名前 30 字，不拼接首条文本", () => {
+		const name = "鹅".repeat(40);
+		expect(archiveLabel(name, "首条指令")).toBe("鹅".repeat(30));
+		expect(archiveSessionName(archiveLabel(`## ${name}/:*?`, "首条指令"))).toBe(`${"鹅".repeat(30)}-archived`);
 	});
 	it.each([undefined, "原会话名"])("空会话保留身份、cwd、parentSession 和名称 %s，无消息", (name) => {
 		const f = fixture();
@@ -64,6 +67,14 @@ describe("归档文件", () => {
 	});
 	it.each(["bad", '{"type":"message"}', '{"type":"session"}\ninvalid'])("损坏输入 %s 拒绝归档", (content) => {
 		expect(() => renderArchivedSession(content, "new", "title")).toThrow();
+	});
+	it("同一分钟重复归档追加序号，不覆盖已有文件", () => {
+		const f = fixture(); const date = new Date(2026, 9, 23, 20, 45);
+		const first = archiveFilePath(f.dir, "持续工作", date); const second = archiveFilePath(f.dir, "持续工作", date);
+		expect(path.basename(first)).toBe("持续工作-archived-2026-10-23-20-45.jsonl");
+		fs.writeFileSync(first, "first");
+		expect(path.basename(archiveFilePath(f.dir, "持续工作", date))).toBe("持续工作-archived-2026-10-23-20-45-2.jsonl");
+		expect(second).toBe(first); expect(fs.readFileSync(first, "utf8")).toBe("first");
 	});
 	it("排他创建不覆盖，替换和回滚恢复精确内容", () => {
 		const f = fixture(); archiveSessionFile(f.file, f.archived, "archive", "empty");
