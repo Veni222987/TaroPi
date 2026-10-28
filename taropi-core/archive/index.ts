@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { archiveFilePath, archiveLabel, archiveSessionFile, renderArchivedSession, renderEmptySession, replaceAtomic, restoreSessionFile } from "./file.ts";
+import { archiveFilePath, archiveLabel, archiveSessionFile, archiveSessionName, renderArchivedSession, renderEmptySession, replaceAtomic, restoreSessionFile } from "./file.ts";
 
 // registerArchive 注册原路径清空、旧内容另存可恢复的 /archive 命令。
 export default function registerArchive(pi: ExtensionAPI): void {
@@ -39,7 +39,7 @@ async function archive(ctx: ExtensionCommandContext, signal: AbortSignal): Promi
 		const original = fs.readFileSync(file, "utf8");
 		const date = new Date();
 		const archivedPath = archiveFilePath(path.dirname(file), label, date);
-		const archived = renderArchivedSession(original, randomUUID(), label, manager.getLeafId());
+		const archived = renderArchivedSession(original, randomUUID(), archiveSessionName(archivedPath), manager.getLeafId());
 		const empty = renderEmptySession({ id: manager.getSessionId(), cwd: header.cwd, parentSession: header.parentSession }, name, date);
 		archiveSessionFile(file, archivedPath, archived, empty);
 		prepared = { file, archivedPath, original };

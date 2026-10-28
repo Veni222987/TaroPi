@@ -20,13 +20,13 @@ export function archiveFilePath(directory: string, label: string, date: Date): s
 	}
 }
 
-// archiveSessionName 用归档标签和归档标记组成显示名称。
-export function archiveSessionName(label: string): string {
-	return `${safeFileNamePart(label, "session", ARCHIVE_LABEL_LIMIT)}-archived`;
+// archiveSessionName 取归档文件名作为显示名称，与文件名含分钟时间和同分钟序号完全一致。
+export function archiveSessionName(archivedPath: string): string {
+	return path.basename(archivedPath, ".jsonl");
 }
 
-// renderArchivedSession 只更换会话身份并追加名称，原条目及其分支关系保持不变。
-export function renderArchivedSession(content: string, newId: string, label: string, leafId?: string | null): string {
+// renderArchivedSession 只更换会话身份并追加已生成的显示名称，原条目及其分支关系保持不变。
+export function renderArchivedSession(content: string, newId: string, name: string, leafId?: string | null): string {
 	const separator = content.indexOf("\n");
 	const firstLine = separator < 0 ? content : content.slice(0, separator);
 	const rest = separator < 0 ? "" : content.slice(separator + 1);
@@ -40,7 +40,7 @@ export function renderArchivedSession(content: string, newId: string, label: str
 		lastId = entry.id;
 	}
 	const body = rest && !rest.endsWith("\n") ? `${rest}\n` : rest;
-	return `${JSON.stringify({ ...header, id: newId })}\n${body}${JSON.stringify(sessionInfo(archiveSessionName(label), leafId === undefined ? lastId : leafId))}\n`;
+	return `${JSON.stringify({ ...header, id: newId })}\n${body}${JSON.stringify(sessionInfo(name, leafId === undefined ? lastId : leafId))}\n`;
 }
 
 // renderEmptySession 保留基本信息，重建无消息的当前会话。

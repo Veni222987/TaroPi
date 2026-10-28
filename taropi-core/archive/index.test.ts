@@ -36,21 +36,23 @@ describe("/archive 命令", () => {
 		expect(f.ctx.abort).not.toHaveBeenCalled();
 		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("无可归档内容"), "info");
 	});
-	it.each([["原名称", "原名称-archived"], ["", "首条需求-archived"], ["  ", "首条需求-archived"]])("会话名 %j 按规则归档为 %s", async (name, expected) => {
+	it.each([["原名称", "原名称"], ["", "首条需求"], ["  ", "首条需求"]])("会话名 %j 按规则归档为 %s", async (name, expected) => {
 		const f = fixture(); f.manager.appendSessionInfo(name); await f.run();
 		const archived = (await SessionManager.list(f.cwd, f.cwd)).find((item) => item.id !== f.manager.getSessionId())!;
-		expect(archived.name).toBe(expected);
-		expect(path.basename(archived.path)).toMatch(new RegExp(`^${expected}-\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}\\.jsonl$`));
+		expect(archived.name).toBe(path.basename(archived.path, ".jsonl"));
+		expect(archived.name).toMatch(new RegExp(`^${expected}-archived-\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}$`));
 	});
 	it("未命名会话取首条用户文本前 30 字，没有文本时用 session", async () => {
 		const f = fixture(true, false);
 		f.manager.appendMessage({ role: "user", content: `  ${"鹅".repeat(40)} 继续`, timestamp: 1 });
 		f.manager.appendSessionInfo(""); await f.run();
 		const archived = (await SessionManager.list(f.cwd, f.cwd)).find((item) => item.id !== f.manager.getSessionId())!;
-		expect(archived.name).toBe(`${"鹅".repeat(30)}-archived`);
+		expect(archived.name).toBe(path.basename(archived.path, ".jsonl"));
+		expect(archived.name).toMatch(new RegExp(`^${"鹅".repeat(30)}-archived-\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}$`));
 		const empty = fixture(true, false); empty.manager.appendMessage({ role: "assistant", content: "没有用户文本", timestamp: 1 }); empty.manager.appendSessionInfo(""); await empty.run();
 		const fallback = (await SessionManager.list(empty.cwd, empty.cwd)).find((item) => item.id !== empty.manager.getSessionId())!;
-		expect(fallback.name).toBe("session-archived");
+		expect(fallback.name).toBe(path.basename(fallback.path, ".jsonl"));
+		expect(fallback.name).toMatch(/^session-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/);
 	});
 	it("UI 取消不改文件", async () => {
 		const f = fixture(); const before = fs.readFileSync(f.file!, "utf8"); f.confirm.mockResolvedValueOnce(false);

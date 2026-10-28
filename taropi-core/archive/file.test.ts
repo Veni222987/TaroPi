@@ -24,15 +24,17 @@ describe("归档文件", () => {
 		expect(archiveLabel("../:*", "首条指令")).toBe("session");
 		expect(() => archiveFilePath("/tmp", "任务", new Date("bad"))).toThrow("时间无效");
 	});
-	it.each([["持续工作", "持续工作-archived"], [undefined, "修复归档-archived"], ["  ", "修复归档-archived"]])("显示名称使用会话名或首条文本 %j", (name, expected) => {
+	it.each([["持续工作", "持续工作"], [undefined, "修复归档"], ["  ", "修复归档"]])("显示名称使用会话名或首条文本 %j", (name, expected) => {
 		const label = archiveLabel(name, "修复归档");
-		expect(archiveSessionName(label)).toBe(expected);
-		expect(path.basename(archiveFilePath("/tmp", label, new Date(2026, 9, 23, 20, 45)))).toBe(`${expected}-2026-10-23-20-45.jsonl`);
+		const file = archiveFilePath("/tmp", label, new Date(2026, 9, 23, 20, 45));
+		expect(path.basename(file)).toBe(`${expected}-archived-2026-10-23-20-45.jsonl`);
+		expect(archiveSessionName(file)).toBe(`${expected}-archived-2026-10-23-20-45`);
 	});
 	it("命名会话只用会话名前 30 字，不拼接首条文本", () => {
 		const name = "鹅".repeat(40);
 		expect(archiveLabel(name, "首条指令")).toBe("鹅".repeat(30));
-		expect(archiveSessionName(archiveLabel(`## ${name}/:*?`, "首条指令"))).toBe(`${"鹅".repeat(30)}-archived`);
+		const file = archiveFilePath("/tmp", archiveLabel(`## ${name}/:*?`, "首条指令"), new Date(2026, 9, 23, 20, 45));
+		expect(archiveSessionName(file)).toBe(`${"鹅".repeat(30)}-archived-2026-10-23-20-45`);
 	});
 	it.each([undefined, "原会话名"])("空会话保留身份、cwd、parentSession 和名称 %s，无消息", (name) => {
 		const f = fixture();
@@ -50,9 +52,9 @@ describe("归档文件", () => {
 		const leaf = manager.appendMessage({ role: "user", content: "当前分支", timestamp: 3 });
 		manager.appendContextEdit(leaf, { content: "修改内容" });
 		const content = fs.readFileSync(manager.getSessionFile()!, "utf8");
-		fs.writeFileSync(f.archived, renderArchivedSession(content, "archive-id", "修复标题", manager.getLeafId()));
+		fs.writeFileSync(f.archived, renderArchivedSession(content, "archive-id", "修复标题-archived-2026-10-23-20-45", manager.getLeafId()));
 		const archived = SessionManager.open(f.archived);
-		expect(archived.getSessionId()).toBe("archive-id"); expect(archived.getSessionName()).toBe("修复标题-archived");
+		expect(archived.getSessionId()).toBe("archive-id"); expect(archived.getSessionName()).toBe("修复标题-archived-2026-10-23-20-45");
 		expect(archived.buildSessionContext().messages).toEqual(manager.buildSessionContext().messages);
 		expect(fs.readFileSync(f.archived, "utf8").split("\n").slice(1, -2)).toEqual(content.trimEnd().split("\n").slice(1));
 	});
@@ -72,8 +74,11 @@ describe("归档文件", () => {
 		const f = fixture(); const date = new Date(2026, 9, 23, 20, 45);
 		const first = archiveFilePath(f.dir, "持续工作", date); const second = archiveFilePath(f.dir, "持续工作", date);
 		expect(path.basename(first)).toBe("持续工作-archived-2026-10-23-20-45.jsonl");
+		expect(archiveSessionName(first)).toBe("持续工作-archived-2026-10-23-20-45");
 		fs.writeFileSync(first, "first");
-		expect(path.basename(archiveFilePath(f.dir, "持续工作", date))).toBe("持续工作-archived-2026-10-23-20-45-2.jsonl");
+		const next = archiveFilePath(f.dir, "持续工作", date);
+		expect(path.basename(next)).toBe("持续工作-archived-2026-10-23-20-45-2.jsonl");
+		expect(archiveSessionName(next)).toBe("持续工作-archived-2026-10-23-20-45-2");
 		expect(second).toBe(first); expect(fs.readFileSync(first, "utf8")).toBe("first");
 	});
 	it("排他创建不覆盖，替换和回滚恢复精确内容", () => {

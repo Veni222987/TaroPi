@@ -75,7 +75,10 @@ describe("真实 AgentSessionRuntime 归档回归（mock provider）", () => {
 			await f.runtime.session.prompt("接入工具行渲染");
 			await f.runtime.session.prompt("/archive");
 			const listed = await SessionManager.list(f.cwd, f.sessionDir);
-			expect(listed.map((item) => item.name).sort()).toEqual(["QQ开发套件甜菜", "QQ开发套件甜菜-archived", "QQ开发套件甜菜-archived"].sort());
+			const archivedItems = listed.filter((item) => item.name !== "QQ开发套件甜菜");
+			expect(listed.filter((item) => item.name === "QQ开发套件甜菜")).toHaveLength(1);
+			expect(archivedItems).toHaveLength(2);
+			expect(archivedItems.every((item) => item.name === path.basename(item.path, ".jsonl") && /^QQ开发套件甜菜-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d+)?$/.test(item.name ?? ""))).toBe(true);
 			expect(new Set(listed.map((item) => item.path)).size).toBe(3);
 			expect(f.requests.every((messages) => !JSON.stringify(messages).includes("为这段会话概括"))).toBe(true);
 			expect(f.runtime.session.messages).toEqual([]); expect(f.errors).toEqual([]);
@@ -93,7 +96,7 @@ describe("真实 AgentSessionRuntime 归档回归（mock provider）", () => {
 			expect(f.runtime.session.messages).toEqual([]);
 			expect(f.runtime.session.pendingMessageCount).toBe(0); expect(f.requests).toHaveLength(1);
 			const files = await SessionManager.list(f.cwd, f.sessionDir);
-			const archived = files.find((item) => item.name?.endsWith("-archived"))!;
+			const archived = files.find((item) => item.name?.includes("-archived-"))!;
 			expect(fs.readFileSync(archived.path, "utf8")).toContain('"stopReason":"aborted"');
 			expect(f.errors).toEqual([]);
 		} finally { await f.runtime.dispose(); }
@@ -115,7 +118,7 @@ describe("真实 AgentSessionRuntime 归档回归（mock provider）", () => {
 			const listed = await SessionManager.list(f.cwd, f.sessionDir);
 			expect(listed).toHaveLength(2); expect(new Set(listed.map((item) => item.id)).size).toBe(2);
 			const archived = listed.find((item) => item.id !== id)!;
-			expect(archived.name).toBe("持续工作-archived"); expect(path.basename(archived.path)).toMatch(/^持续工作-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.jsonl$/);
+			expect(archived.name).toBe(path.basename(archived.path, ".jsonl")); expect(archived.name).toMatch(/^持续工作-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/);
 			expect(SessionManager.open(archived.path).buildSessionContext().messages).toEqual(before);
 			expect(f.requests.every((messages) => !JSON.stringify(messages).includes("为这段会话概括"))).toBe(true);
 			expect(fs.readFileSync(file, "utf8")).not.toContain("不应带入新会话");
