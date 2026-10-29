@@ -11,6 +11,11 @@ export function archiveLabel(name: string | undefined, source: string): string {
 	return safeFileNamePart(name?.trim() ? name : source, "session", ARCHIVE_LABEL_LIMIT);
 }
 
+// customArchiveLabel 清理自定义归档标签，最多保留 30 个 Unicode 字符，无有效文本时不生成标签。
+export function customArchiveLabel(args: string): string | undefined {
+	return safeFileNamePart(args, "", ARCHIVE_LABEL_LIMIT) || undefined;
+}
+
 // archiveFilePath 生成同目录可检索的归档路径，同一分钟重复时追加序号。
 export function archiveFilePath(directory: string, label: string, date: Date): string {
 	const base = `${safeFileNamePart(label, "session", ARCHIVE_LABEL_LIMIT)}-archived-${localMinute(date)}`;

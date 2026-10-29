@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { archiveFilePath, archiveLabel, archiveSessionName, archiveSessionFile, renderArchivedSession, renderEmptySession, replaceAtomic, restoreSessionFile, writeExclusive } from "./file.ts";
+import { archiveFilePath, archiveLabel, archiveSessionName, archiveSessionFile, customArchiveLabel, renderArchivedSession, renderEmptySession, replaceAtomic, restoreSessionFile, writeExclusive } from "./file.ts";
 
 vi.mock("node:fs", async (original) => ({ ...await original<typeof fs>() }));
 const directories: string[] = [];
@@ -16,6 +16,18 @@ function fixture() {
 }
 
 describe("归档文件", () => {
+	it.each([
+		["排查xx问题", "排查xx问题"],
+		["  ## 排查/标题:*?  ", "排查标题"],
+		["排查 xx 问题", "排查-xx-问题"],
+		["😀".repeat(40), "😀".repeat(30)],
+		["///", undefined],
+		["../:*?", undefined],
+		["", undefined],
+		[" \t\n ", undefined],
+	])("自定义标签 %j 清理为 %j", (args, expected) => {
+		expect(customArchiveLabel(args)).toBe(expected);
+	});
 	it("本机分钟、30 字截断及非法字符，时间无效时拒绝", () => {
 		expect(archiveLabel(undefined, "## 修复/标题")).toBe("修复标题");
 		expect(path.basename(archiveFilePath("/tmp", archiveLabel(undefined, "## 修复/标题"), new Date(2026, 9, 23, 20, 45)))).toBe("修复标题-archived-2026-10-23-20-45.jsonl");

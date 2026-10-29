@@ -66,6 +66,29 @@ async function fixture(shutdownWrites = false) {
 }
 
 describe("真实 AgentSessionRuntime 归档回归（mock provider）", () => {
+	it("原生命令透传自定义标题，不请求模型，原会话可继续按默认规则归档", async () => {
+		const f = await fixture();
+		try {
+			await f.runtime.session.prompt("排查前的旧内容");
+			const manager = f.runtime.session.sessionManager;
+			manager.appendSessionInfo("持续工作");
+			const file = manager.getSessionFile()!, id = manager.getSessionId();
+			const before = structuredClone(f.runtime.session.messages);
+			await f.runtime.session.prompt("/archive 排查 xx 问题");
+			const archived = (await SessionManager.list(f.cwd, f.sessionDir)).find((item) => item.id !== id)!;
+			expect(archived.name).toBe(path.basename(archived.path, ".jsonl"));
+			expect(archived.name).toMatch(/^排查-xx-问题-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/);
+			expect(SessionManager.open(archived.path).buildSessionContext().messages).toEqual(before);
+			expect(f.runtime.session.sessionFile).toBe(file); expect(f.runtime.session.sessionManager.getSessionId()).toBe(id);
+			expect(f.runtime.session.sessionManager.getSessionName()).toBe("持续工作"); expect(f.runtime.session.messages).toEqual([]);
+			expect(f.requests).toHaveLength(1);
+			await f.runtime.session.prompt("下一条需求"); await f.runtime.session.prompt("/archive");
+			const listed = await SessionManager.list(f.cwd, f.sessionDir);
+			expect(listed).toHaveLength(3);
+			expect(listed.some((item) => /^持续工作-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/.test(item.name ?? ""))).toBe(true);
+			expect(f.requests).toHaveLength(2); expect(f.errors).toEqual([]);
+		} finally { await f.runtime.dispose(); }
+	}, 15000);
 	it("同一命名会话多次归档使用会话名和时间，不请求模型", async () => {
 		const f = await fixture();
 		try {

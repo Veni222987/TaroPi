@@ -14,7 +14,7 @@ function fixture(persist = true, conversation = true) {
 	const manager = persist ? SessionManager.create(cwd, cwd) : SessionManager.inMemory(cwd);
 	if (conversation) manager.appendMessage({ role: "user", content: "首条需求", timestamp: 1 });
 	manager.appendSessionInfo("原会话名称");
-	const notify = vi.fn(), confirm = vi.fn(async () => true);
+	const notify = vi.fn(), confirm = vi.fn<ExtensionCommandContext["ui"]["confirm"]>(async () => true);
 	const calls: string[] = [];
 	const ctx = { cwd, hasUI: true, sessionManager: manager, ui: { notify, confirm },
 		abort: vi.fn(() => { calls.push("abort"); }), waitForIdle: vi.fn(async () => { calls.push("idle"); }), isIdle: vi.fn(() => true),
@@ -27,7 +27,7 @@ function fixture(persist = true, conversation = true) {
 	let handler: ((args: string, context: ExtensionCommandContext) => Promise<void>) | undefined;
 	const api = { registerCommand: vi.fn((_name, command) => { handler = command.handler; }), on: vi.fn() };
 	registerArchive(api as unknown as ExtensionAPI);
-	return { ctx, manager, notify, confirm, calls, api, cwd, run: () => handler!("", ctx), file: manager.getSessionFile() };
+	return { ctx, manager, notify, confirm, calls, api, cwd, run: (args = "") => handler!(args, ctx), file: manager.getSessionFile() };
 }
 
 describe("/archive 命令", () => {
@@ -49,14 +49,61 @@ describe("/archive 命令", () => {
 		const archived = (await SessionManager.list(f.cwd, f.cwd)).find((item) => item.id !== f.manager.getSessionId())!;
 		expect(archived.name).toBe(path.basename(archived.path, ".jsonl"));
 		expect(archived.name).toMatch(new RegExp(`^${"鹅".repeat(30)}-archived-\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}$`));
-		const empty = fixture(true, false); empty.manager.appendMessage({ role: "assistant", content: "没有用户文本", timestamp: 1 }); empty.manager.appendSessionInfo(""); await empty.run();
+		const empty = fixture(true, false);
+		empty.manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "没有用户文本" }], timestamp: 1,
+			api: "anthropic-messages", provider: "test", model: "test", stopReason: "stop",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		});
+		empty.manager.appendSessionInfo(""); await empty.run();
 		const fallback = (await SessionManager.list(empty.cwd, empty.cwd)).find((item) => item.id !== empty.manager.getSessionId())!;
 		expect(fallback.name).toBe(path.basename(fallback.path, ".jsonl"));
 		expect(fallback.name).toMatch(/^session-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/);
 	});
-	it("UI 取消不改文件", async () => {
+	it.each(["排查xx问题", "  ## 排查/xx问题:*?  "])("自定义标题 %j 优先于会话名并保留当前身份与名称", async (args) => {
+		const f = fixture(); await f.run(args);
+		const archived = (await SessionManager.list(f.cwd, f.cwd)).find((item) => item.id !== f.manager.getSessionId())!;
+		expect(archived.name).toBe(path.basename(archived.path, ".jsonl"));
+		expect(archived.name).toMatch(/^排查xx问题-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/);
+		expect(f.confirm).toHaveBeenCalledWith("归档并清空当前会话？", expect.stringContaining(archived.path));
+		const fresh = SessionManager.open(f.file!);
+		expect(fresh.getSessionId()).toBe(f.manager.getSessionId()); expect(fresh.getSessionName()).toBe("原会话名称");
+		expect(fresh.buildSessionContext().messages).toEqual([]);
+	});
+	it("纯空白参数沿用原命名规则", async () => {
+		const f = fixture(); await f.run(" \t\n ");
+		const archived = (await SessionManager.list(f.cwd, f.cwd)).find((item) => item.id !== f.manager.getSessionId())!;
+		expect(archived.name).toMatch(/^原会话名称-archived-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/);
+	});
+	it.each(["///", "../:*?"])("非法自定义标题 %j 拒绝归档，不中止任务或修改文件", async (args) => {
+		const f = fixture(); const before = fs.readFileSync(f.file!, "utf8"); await f.run(args);
+		expect(f.notify).toHaveBeenCalledWith("归档已取消：自定义标题无效，请换一个标题", "warning");
+		expect(f.confirm).not.toHaveBeenCalled(); expect(f.ctx.abort).not.toHaveBeenCalled();
+		expect(f.ctx.waitForIdle).not.toHaveBeenCalled(); expect(f.ctx.switchSession).not.toHaveBeenCalled();
+		expect(fs.readFileSync(f.file!, "utf8")).toBe(before);
+		expect(fs.readdirSync(f.cwd)).toEqual([path.basename(f.file!)]);
+	});
+	it("确认跨分钟仍按展示的路径归档，同分钟追加序号不覆盖", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(new Date(2026, 9, 29, 21, 16, 59));
+			const f = fixture();
+			const first = path.join(f.cwd, "排查xx问题-archived-2026-10-29-21-16.jsonl");
+			fs.writeFileSync(first, "existing archive");
+			const expected = path.join(f.cwd, "排查xx问题-archived-2026-10-29-21-16-2.jsonl");
+			f.confirm.mockImplementationOnce(async (_title, message) => {
+				expect(message).toContain(expected);
+				vi.setSystemTime(new Date(2026, 9, 29, 21, 17));
+				return true;
+			});
+			await f.run("排查xx问题");
+			expect(SessionManager.open(expected).getSessionName()).toBe(path.basename(expected, ".jsonl"));
+			expect(fs.readFileSync(first, "utf8")).toBe("existing archive");
+			expect(f.ctx.switchSession).toHaveBeenCalled();
+		} finally { vi.useRealTimers(); }
+	});
+	it.each(["", "排查xx问题"])("UI 取消不改文件，参数 %j", async (args) => {
 		const f = fixture(); const before = fs.readFileSync(f.file!, "utf8"); f.confirm.mockResolvedValueOnce(false);
-		await f.run(); expect(f.ctx.abort).not.toHaveBeenCalled();
+		await f.run(args); expect(f.ctx.abort).not.toHaveBeenCalled();
 		expect(fs.readFileSync(f.file!, "utf8")).toBe(before); expect(f.ctx.switchSession).not.toHaveBeenCalled();
 		expect(fs.readdirSync(f.cwd)).toEqual([path.basename(f.file!)]);
 	});
@@ -105,12 +152,18 @@ describe("/archive 命令", () => {
 		await expect(f.run()).rejects.toThrow("回滚失败");
 		expect(fs.readdirSync(f.cwd).filter((file) => file.includes("archived"))).toHaveLength(1);
 	});
-	it("同分钟同名拒绝归档，当前及归档都不覆盖", async () => {
+	it.each(["", "排查xx问题"])("确认期间目标被创建时拒绝归档，不覆盖文件，参数 %j", async (args) => {
 		const f = fixture(); const before = fs.readFileSync(f.file!, "utf8");
-		vi.spyOn(files, "archiveFilePath").mockReturnValueOnce(path.join(f.cwd, "collision.jsonl"));
-		fs.writeFileSync(path.join(f.cwd, "collision.jsonl"), "another session");
-		await f.run(); expect(fs.readFileSync(f.file!, "utf8")).toBe(before);
-		expect(fs.readFileSync(path.join(f.cwd, "collision.jsonl"), "utf8")).toBe("another session");
+		const collision = path.join(f.cwd, "collision.jsonl");
+		vi.spyOn(files, "archiveFilePath").mockReturnValueOnce(collision);
+		f.confirm.mockImplementationOnce(async (_title, message) => {
+			expect(message).toContain(collision);
+			fs.writeFileSync(collision, "another session");
+			return true;
+		});
+		await f.run(args); expect(fs.readFileSync(f.file!, "utf8")).toBe(before);
+		expect(fs.readFileSync(collision, "utf8")).toBe("another session");
+		expect(f.notify).toHaveBeenCalledWith(expect.stringContaining("归档未完成"), "error");
 		expect(f.ctx.switchSession).not.toHaveBeenCalled();
 	});
 	it("文件校验失败保留归档，不回滚已替换的 runtime", async () => {
