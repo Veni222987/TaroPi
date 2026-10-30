@@ -201,6 +201,8 @@ TaroPi/
 
 新建 `../taropi-plain/skills/name/SKILL.md`（frontmatter 含 name / description），无需改 package.json，/reload 即可生效。
 
+已有 skill：`diagram-drawio`（用 mcporter 调 drawio MCP 画架构图、流程图并导出）。首次使用先运行 `../taropi-plain/skills/diagram-drawio/scripts/setup.sh`，可加 `--dry-run` 预览改动；脚本幂等，会补全 `~/.mcporter/mcporter.json` 的 drawio 条目、启动 keep-alive 守护进程，安装无头浏览器 `chrome-headless-shell` 到 `~/.local/bin`（`--no-browser` 可跳过），并建好 `~/.local/share/next-drawio/{src,exported}`。预览用 `preview.sh start|stop|status` 管理。
+
 ## 依赖
 
 - `@earendil-works/pi-coding-agent` (peer)

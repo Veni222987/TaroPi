@@ -84,6 +84,6 @@ pi 会自动 clone 仓库并运行 `npm install`，`ask_user_question` 等所有
 |----|------|
 | `taropi-core` | 核心整合包：全局 PREAMBLE 角色替换、subagent 工具、权限管控、网络访问、向用户提问等；中文表达规则按推荐的 `APPEND_SYSTEM.md` 配置启用 |
 | `taropi-hud` | 可扩展 HUD 宿主：基础状态面板、`/hud-fresh` 和外部子版块开发接口 |
-| `taropi-plain` | 纯文本资源目录：PREAMBLE、追加系统提示词、agents、skills 和推荐配置 |
+| `taropi-plain` | 纯文本资源目录：PREAMBLE、追加系统提示词、agents、skills 和推荐配置；内置 `diagram-drawio` skill，用 mcporter 调 drawio MCP 画图，首次使用先跑 `taropi-plain/skills/diagram-drawio/scripts/setup.sh`（含无头浏览器 chrome-headless-shell 安装到 `~/.local/bin`）；图源文件在 `~/.local/share/next-drawio/src`，导出文件在 `~/.local/share/next-drawio/exported` |
 
 <!-- test-passed: 2026 -->
