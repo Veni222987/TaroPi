@@ -1,19 +1,76 @@
 ---
 name: genshine-sign
-description: 在已连接的安卓设备上完成米游社原神每日签到。仅当用户明确说到原神签到时使用，其他情况不要加载。
+description: 在局域网安卓设备上完成米游社原神每日签到。先发现并重连设备，不要假设已经连上。仅当用户明确说到原神签到时使用，其他情况不要加载。
 ---
 
 # 原神签到
 
-在一台已经可以控制的安卓设备上，打开米游社并完成原神每日签到。不要写设备怎么连接，默认已有一台可用设备。
+打开米游社并完成原神每日签到。电脑重启后旧的无线调试连接会掉，不要默认已有可用设备。先按「发现并重连」拿到一台状态为 `device` 的设备，再签到。
 
 进入签到 H5 之前，只用截图和原生 `input` 指令。`local.h5tap` 只用于签到页：那是米游社里的内嵌网页，`adb shell input tap` 点不进去。
 
 全部做完（签到成功，或确认今天已经签过）后，先把结果截图留下，再强制关闭米游社并息屏。不要把应用和屏幕留着。
 
+## 发现并重连
+
+设备是局域网里的三星平板 `SM-P610`（`gta4xlwifi`），走无线调试，不是 USB。电脑重启后连接会掉，不要当成已经连上。用户不会去改平板上的调试开关，下面这组参数是固定默认值，直接用，不要现问，也不要扫端口：
+
+- IP：`192.168.2.24`
+- 连接端口：`33295`，序列号 `$S` 就是 `192.168.2.24:33295`
+- 配对端口：`38217`，配对码：`748050`
+- 配对过的设备名：`adb-R52RA09S7ND-l4Op1e`
+
+配对码只在这一台、这一次配对里有效。本机已经配对成功过，密钥在 `~/.android`，平时只要 `adb connect`，不要每次都 `adb pair`。
+
+1. 先看现在连着谁：
+
+```bash
+adb devices -l
+adb mdns services
+```
+
+`192.168.2.24:33295` 已经是 `device`，就用它，不要再连一次。`unauthorized` 停下来告诉用户，不要重配。`mdns services` 里有别的 `_adb-tls-connect._tcp` 地址时，只用它给出的这一台地址，不要猜别的设备。
+
+2. 没有 `device` 就按默认地址重连：
+
+```bash
+adb connect 192.168.2.24:33295
+adb devices -l
+```
+
+连上且状态为 `device` 就继续。不要试 `5555`，也不要扫描其他端口。
+
+3. 这一步失败（`failed to connect`、`Connection refused`，或状态不是 `device`），先确认平板还在线：
+
+```bash
+ping -c 1 -W 1000 192.168.2.24
+```
+
+能 ping 通，再用同一组配对参数重配一次，然后重新连接：
+
+```bash
+adb pair 192.168.2.24:38217 748050
+adb connect 192.168.2.24:33295
+adb devices -l
+```
+
+`adb pair` 成功但 `connect` 仍失败，说明连接端口变了。停下来告诉用户，不要自己扫端口。ping 不通，或者 `adb pair` 拒绝这个配对码，也停下来告诉用户。不要猜新的 IP、端口或配对码。
+
+4. 拿到 `device` 之后确认是这台平板，并且已安装米游社 `com.mihoyo.hyperion`。型号不是 `SM-P610` 就停下来告诉用户，不要在别的设备上继续。
+
+```bash
+adb -s "$S" shell getprop ro.product.model
+adb -s "$S" shell pm path com.mihoyo.hyperion
+```
+
+```bash
+adb -s "$S" shell getprop ro.product.model
+adb -s "$S" shell pm path com.mihoyo.hyperion
+```
+
 ## 前置校验
 
-1. 确认有一台已连接的安卓设备，虚拟机或真机的 ADB 都行：`adb devices` 里状态为 `device`。多台时用 `-s <serial>` 指定，下面命令里的 `$S` 就是这个序列号。
+1. 上面的重连已经拿到一台状态为 `device` 的设备，`$S` 是它的序列号。这一步不要再假设设备还连着。
 2. 设备上已安装米游社，包名 `com.mihoyo.hyperion`，并且已登录、绑定了原神角色。
 3. 进入签到 H5 之前不要装点击服务。只有当前焦点已经是 `com.mihoyo.hyperion.web2.MiHoYoWebActivity`，并且标题是「米游社原神每日签到」时，才检查并使用本 skill 自带的点击服务。没装过就跑一次本 skill 目录的 `h5tap/build.sh`：
 
