@@ -42,12 +42,13 @@ export interface ModelChoice {
   provider: string;
 }
 
-// parseProviderModelId 解析严格的 provider/model-id 格式。
+// parseProviderModelId 按第一个 / 解析 provider/model-id，model-id 可包含 /。
 export function parseProviderModelId(raw: string): ProviderModelId | undefined {
-  const parts = raw.split("/");
-  if (parts.length !== 2) return undefined;
+  const separator = raw.indexOf("/");
+  if (separator < 1) return undefined;
 
-  const [provider, modelId] = parts;
+  const provider = raw.slice(0, separator);
+  const modelId = raw.slice(separator + 1);
   if (
     !provider ||
     !modelId ||
@@ -82,7 +83,7 @@ export function findModelsById<T extends { id: string }>(models: readonly T[], i
 }
 
 // modelsToChoices 将 Model 列表转换为供模型选择页渲染的选项。
-export function modelsToChoices(models: Model<any>[]): ModelChoice[] {
+export function modelsToChoices(models: readonly Pick<Model<string>, "provider" | "id" | "name">[]): ModelChoice[] {
   return models.map((model) => ({
     providerModelId: `${model.provider}/${model.id}`,
     id: model.id,

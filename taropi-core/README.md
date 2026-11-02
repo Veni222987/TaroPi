@@ -13,6 +13,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 📋 Plan Workflow | `/plan 任务描述` — 会话级三态（idle / planning / implementing）：只读调研 → 工具内真实用户确认 → 实施；状态与正文保存在同一个 Markdown frontmatter，支持中断、恢复、自然语言退出与手动切模型 |
 | 🎛️ 工具行渲染 | 内置 `pi-compact-tools`，`/compact-tools` 切换 Compact / Claude / Codex / 原生样式，`/silent` 或 `Ctrl+'` 切换静默显示；只改界面，不改工具执行或模型上下文 |
 | 📦 会话归档 | `/archive` — 可带自定义标题，如 `/archive 排查xx问题`；旧内容另存为可搜索恢复的新 id 会话，当前 id、路径和名称保留，上下文清空；活动 plan 自动终止，详见 [归档说明](archive/README.md) |
+| 🥈 模型别名 | `/model-alias` — 管理 Au / Ag / Cu 三档绑定；Ag 与全局默认模型双向联动，启动或恢复时不对齐，不切换当前会话模型 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索（Brave/Exa/OpenAI）、URL 正文抓取、GitHub 仓库/文件、图片、本地 PDF 文本提取 |
 | 🖥️ HUD 状态面板 | 常驻显示 Git、模型/上下文/Token 用量，以及本机已加载 HUD 的交互会话目录状态；idle 表示等待用户，working 表示模型、工具或自动处理执行中。外部包可通过 `taropi-hud` 注册带刷新能力的文本子版块，`/hud-fresh` 并发刷新全部子版块 |
@@ -46,6 +47,26 @@ make test
 该文件是 TaroPi 的扩展约定，不是 Pi 原生 SYSTEM 机制。它仅在请求阶段替换结构化 `preamble` 区块，不改变工具定义、工具可用性、工具摘要、规则、Pi 文档指引、skills、项目上下文、当前工作目录或 `APPEND_SYSTEM.md`。
 
 Pi 原生 `SYSTEM.md`、`--system-prompt` 或其他扩展的强制完整提示词优先；发生冲突时，本模块跳过替换并给出一次提示。删除或移走 PREAMBLE 后 `/reload`，即可恢复 Pi 默认角色。
+
+### 模型别名与默认模型
+
+`/model-alias` 打开三档别名设置页；`/model-alias Ag` 查看银牌绑定，也可直接绑定：
+
+```text
+/model-alias Ag magpie/cursor/grok-4.7@500k
+```
+
+参数按第一个 `/` 拆分为 provider 与 model-id，model-id 本身可以包含 `/`。绑定必须匹配当前可用模型；别名保存在 `getAgentDir()/model-aliases.json`，遵循 `PI_CODING_AGENT_DIR`。
+
+**Ag ↔ 全局默认模型联动：**
+
+- 通过参数或 TUI 修改 Ag 后，同步写入全局 `settings.json` 的 `defaultProvider` / `defaultModel`，不修改其他字段。Au、Cu 不参与联动。
+- 在 `/model` 中按 `Ctrl+S` 保存默认模型后，Ag 跟随；只临时切换当前模型（包括 plan 切换）不会改 Ag。检查在模型选择事件、下一次输入及 `/model-alias` 执行前进行。
+- 对当前模型按 `Ctrl+S` 不会触发模型选择事件，Ag 会在下一次输入或执行 `/model-alias` 时跟随。运行期间手动修改全局默认模型也在这些检查点生效，不后台监听文件。
+- 启动、恢复或 `/reload` 时只记录默认模型基线，即使 Ag 与默认模型不同也不自动对齐。未设置或移除默认模型不清除 Ag。
+- 联动只改变配置，不切换当前会话模型、不写入模型上下文。修改 Ag 后，当前进程的 `/model` 默认标记需要 `/new` 或 `/reload` 才会刷新；新会话读取更新后的默认模型。
+- 项目级 `.pi/settings.json` 的默认模型覆盖不参与联动，实际启动模型仍遵循 Pi 的项目配置优先规则。手动编辑 Ag 文件不触发反向同步，需要通过 `/model-alias` 绑定。
+- 配置读取或写入失败会明确提示，损坏的默认配置不会被覆盖。若 Ag 已绑定但默认模型同步失败，修复配置后重新执行绑定即可重试。
 
 ### 权限管控（可选）
 

@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   findModelByProviderModelId,
   findModelsById,
@@ -7,22 +7,19 @@ import {
   type AliasTier,
 } from "./types.js";
 import { TIER_LABEL } from "./types.js";
-import { aliasStore, resolveModelAlias } from "./store.js";
+import { aliasStore } from "./store.js";
+import { DefaultModelSync } from "./default-sync.js";
 import { AliasSettingsPage, ModelPickerPage } from "./ui.js";
 
 export { resolveModelAlias } from "./store.js";
 
-/**
- * 注册 /model-alias 命令与模块
- *
- * 用法：
- *   /model-alias           → 打开 TUI 设置页（三步：选档位 → 选模型 → 确认绑定）
- *   /model-alias Au qq/gpt-5  → 直接绑定 Au 档位到 qq/gpt-5（print mode 兼容）
- */
+// register 注册 /model-alias 命令和 Ag 与全局默认模型的双向联动。
 export function register(pi: ExtensionAPI): void {
+  const defaultSync = new DefaultModelSync();
   pi.registerCommand("model-alias", {
     description: "设置三档模型别名（参数使用 provider/model-id）",
     handler: async (args, ctx) => {
+      await defaultSync.syncAgFromDefault(ctx);
       const trimmed = args.trim();
 
       // 直接参数模式：/model-alias <tier> <provider/model-id>
@@ -65,9 +62,7 @@ export function register(pi: ExtensionAPI): void {
           return;
         }
 
-        const resolvedProviderModelId = `${matched.provider}/${matched.id}`;
-        aliasStore.set(tier, resolvedProviderModelId);
-        ctx.ui.notify(`${TIER_LABEL[tier]} → ${resolvedProviderModelId}  ✅`, "info");
+        await bindTier(ctx, tier, matched, defaultSync);
         return;
       }
 
@@ -80,13 +75,21 @@ export function register(pi: ExtensionAPI): void {
         return;
       }
 
-      await openTuiSettings(ctx);
+      await openTuiSettings(ctx, defaultSync);
     },
   });
 
-  // session_start 时热重载 alias 文件（支持外部直接修改后即时生效）
-  pi.on("session_start", async () => {
+  // 启动与恢复仅重载绑定和记录基线，不改变用户已有配置。
+  pi.on("session_start", async (_event, ctx) => {
     aliasStore.reload();
+    await defaultSync.initialize(ctx);
+  });
+  pi.on("model_select", async (_event, ctx) => {
+    await defaultSync.syncAgFromDefault(ctx);
+  });
+  // 对当前模型按 Ctrl+S 不会发出 model_select，下次输入时补检查。
+  pi.on("input", async (_event, ctx) => {
+    await defaultSync.syncAgFromDefault(ctx);
   });
 }
 
@@ -100,12 +103,31 @@ function normalizeTier(raw: string): AliasTier | undefined {
   return undefined;
 }
 
+async function bindTier(
+  ctx: ExtensionContext,
+  tier: AliasTier,
+  model: { provider: string; id: string },
+  defaultSync: DefaultModelSync,
+): Promise<void> {
+  const providerModelId = `${model.provider}/${model.id}`;
+  try {
+    aliasStore.reload();
+    aliasStore.set(tier, providerModelId);
+  } catch (error) {
+    ctx.ui.notify(`模型别名绑定失败: ${error instanceof Error ? error.message : String(error)}`, "error");
+    return;
+  }
+  const synced = tier === "Ag" && await defaultSync.syncDefaultFromAg(ctx, model);
+  const hint = tier === "Ag" ? (synced ? "，默认模型已同步" : "，默认模型未同步") : "";
+  ctx.ui.notify(`${TIER_LABEL[tier]} → ${providerModelId}${hint}  ✅`, "info");
+}
+
 // ─── TUI 交互 ─────────────────────────────────────────────────
 
-async function openTuiSettings(ctx: any): Promise<void> {
+async function openTuiSettings(ctx: ExtensionContext, defaultSync: DefaultModelSync): Promise<void> {
   // 第一层：选择档位
-  const tier: AliasTier | null = await ctx.ui.custom(
-    (_tui: any, _theme: any, _keybindings: any, done: any) => new AliasSettingsPage(
+  const tier = await ctx.ui.custom<AliasTier | null>(
+    (_tui, _theme, _keybindings, done) => new AliasSettingsPage(
       { Au: aliasStore.get("Au"), Ag: aliasStore.get("Ag"), Cu: aliasStore.get("Cu") },
       (t) => done(t),
       () => done(null),
@@ -131,8 +153,8 @@ async function openTuiSettings(ctx: any): Promise<void> {
 
   const choices = modelsToChoices(allModels);
   let pickerWidth = 80;
-  const providerModelId: string | null = await ctx.ui.custom(
-    (tui: any, _theme: any, _keybindings: any, done: any) => {
+  const providerModelId = await ctx.ui.custom<string | null>(
+    (tui, _theme, _keybindings, done) => {
       pickerWidth = Math.min(80, Math.max(1, tui.terminal.columns - 4));
       return new ModelPickerPage(
         choices,
@@ -154,6 +176,10 @@ async function openTuiSettings(ctx: any): Promise<void> {
 
   if (!providerModelId) return; // 用户取消
 
-  aliasStore.set(tier, providerModelId);
-  ctx.ui.notify(`${TIER_LABEL[tier]} → ${providerModelId}  ✅`, "info");
+  const matched = findModelByProviderModelId(ctx.modelRegistry.getAvailable(), providerModelId);
+  if (!matched) {
+    ctx.ui.notify(`未匹配到模型: ${providerModelId}`, "error");
+    return;
+  }
+  await bindTier(ctx, tier, matched, defaultSync);
 }

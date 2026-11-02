@@ -14,7 +14,7 @@ const models = [
 
 describe("模型选择项", () => {
   it("保留 provider、id、name 与 provider/model-id，并保持原始顺序", () => {
-    const choices = modelsToChoices(models as never);
+    const choices = modelsToChoices(models);
 
     expect(choices).toEqual([
       { provider: "qq", id: "gpt-5", name: "GPT 5", providerModelId: "qq/gpt-5" },
@@ -34,7 +34,15 @@ describe("provider/model-id 解析与匹配", () => {
     expect(parseProviderModelId("qq/gpt-5")).toEqual({ provider: "qq", modelId: "gpt-5" });
   });
 
-  it.each(["gpt-5", "/gpt-5", "qq/", "qq/gpt-5/preview", " qq/gpt-5", "qq/gpt-5 "])(
+  it("按第一个 / 拆分，保留 model-id 中的 /", () => {
+    expect(parseProviderModelId("qq/gpt-5/preview")).toEqual({ provider: "qq", modelId: "gpt-5/preview" });
+    expect(parseProviderModelId("magpie/cursor/grok-4.7@500k")).toEqual({ provider: "magpie", modelId: "cursor/grok-4.7@500k" });
+    const nestedModels = [{ provider: "magpie", id: "cursor/grok-4.7@500k" }];
+    expect(findModelByProviderModelId(nestedModels, "magpie/cursor/grok-4.7@500k")).toBe(nestedModels[0]);
+    expect(findModelByProviderModelId(nestedModels, "magpie/grok-4.7@500k")).toBeUndefined();
+  });
+
+  it.each(["", "gpt-5", "/gpt-5", "qq/", " qq/gpt-5", "qq/gpt-5 ", "qq/gpt 5/preview"])(
     "拒绝无效格式: %s",
     (value) => {
       expect(parseProviderModelId(value)).toBeUndefined();

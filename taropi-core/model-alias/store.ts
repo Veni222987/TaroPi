@@ -57,8 +57,9 @@ class ModelAliasStore {
   /** 设置某个档位的模型绑定 */
   set(tier: AliasTier, providerModelId: string): void {
     this.ensureLoaded();
-    this.config[tier] = providerModelId;
-    saveToFile(this.config);
+    const nextConfig = { ...this.config, [tier]: providerModelId };
+    saveToFile(nextConfig);
+    this.config = nextConfig;
   }
 
   /** 清除某个档位的绑定 */
