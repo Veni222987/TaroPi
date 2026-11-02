@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import registerCompactTools from "pi-compact-tools/extensions/compact-tools.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerAutoCompact } from "./auto-compact/index.ts";
 import registerTaroPi from "./index.ts";
 
 const isolation = vi.hoisted(() => ({ agentDir: "" }));
@@ -19,6 +20,7 @@ vi.mock("@juicesharp/rpiv-ask-user-question", () => ({ default: vi.fn() }));
 vi.mock("./hud-adapt.ts", () => ({ registerHudFeature: vi.fn() }));
 vi.mock("./model-alias/index.js", () => ({ register: vi.fn() }));
 vi.mock("./preamble/index.ts", () => ({ register: vi.fn() }));
+vi.mock("./auto-compact/index.ts", () => ({ registerAutoCompact: vi.fn() }));
 vi.mock("pi-compact-tools/extensions/compact-tools.ts", async (original) => {
 	const extension = await original<typeof import("pi-compact-tools/extensions/compact-tools.ts")>();
 	return { ...extension, default: vi.fn(extension.default) };
@@ -38,6 +40,7 @@ describe("core 收编 compact-tools", () => {
 		};
 		registerTaroPi(api as unknown as ExtensionAPI);
 		expect(registerCompactTools).toHaveBeenCalledExactlyOnceWith(api);
+		expect(registerAutoCompact).toHaveBeenCalledExactlyOnceWith(api);
 		expect(api.registerCommand.mock.calls.map(([name]) => name)).toEqual(["silent", "compact-tools"]);
 		expect(api.registerToolRenderer).toHaveBeenCalledTimes(1);
 		expect(api.registerMarkdownTransformer).toHaveBeenCalledTimes(1);

@@ -10,6 +10,7 @@ import registerCompactTools from "pi-compact-tools/extensions/compact-tools.ts";
 import { registerHudFeature } from "./hud-adapt.ts";
 import { register as registerModelAlias } from "./model-alias/index.js";
 import { register as registerPreamble } from "./preamble/index.ts";
+import { registerAutoCompact } from "./auto-compact/index.ts";
 
 // registerTaroPi 注册 TaroPi 核心扩展。
 export default function registerTaroPi(pi: ExtensionAPI): void {
@@ -23,5 +24,6 @@ export default function registerTaroPi(pi: ExtensionAPI): void {
   registerPermissions(pi);
   registerWebAccess(pi);
   registerModelAlias(pi);
+  registerAutoCompact(pi);
   registerCompactTools(pi);
 }
