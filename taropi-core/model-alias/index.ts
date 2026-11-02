@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   findModelByProviderModelId,
   findModelsById,
@@ -104,7 +104,7 @@ function normalizeTier(raw: string): AliasTier | undefined {
 }
 
 async function bindTier(
-  ctx: ExtensionContext,
+  ctx: ExtensionCommandContext,
   tier: AliasTier,
   model: { provider: string; id: string },
   defaultSync: DefaultModelSync,
@@ -118,13 +118,19 @@ async function bindTier(
     return;
   }
   const synced = tier === "Ag" && await defaultSync.syncDefaultFromAg(ctx, model);
-  const hint = tier === "Ag" ? (synced ? "，默认模型已同步" : "，默认模型未同步") : "";
+  if (synced) {
+    ctx.ui.notify(`${TIER_LABEL[tier]} → ${providerModelId}，默认配置已保存，正在重新加载使当前默认模型生效`, "info");
+    // reload 会使当前 pi 和 ctx 失效，此后不再访问旧运行时，也不切换当前模型。
+    await ctx.reload();
+    return;
+  }
+  const hint = tier === "Ag" ? "，默认模型未同步" : "";
   ctx.ui.notify(`${TIER_LABEL[tier]} → ${providerModelId}${hint}  ✅`, "info");
 }
 
 // ─── TUI 交互 ─────────────────────────────────────────────────
 
-async function openTuiSettings(ctx: ExtensionContext, defaultSync: DefaultModelSync): Promise<void> {
+async function openTuiSettings(ctx: ExtensionCommandContext, defaultSync: DefaultModelSync): Promise<void> {
   // 第一层：选择档位
   const tier = await ctx.ui.custom<AliasTier | null>(
     (_tui, _theme, _keybindings, done) => new AliasSettingsPage(

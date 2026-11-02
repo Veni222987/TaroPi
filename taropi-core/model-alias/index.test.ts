@@ -17,6 +17,7 @@ let command: Command;
 const hooks = new Map<string, Hook>();
 const notify = vi.fn();
 const custom = vi.fn();
+const reload = vi.fn(async () => undefined);
 const available = vi.fn(() => [
   { provider: "qq", id: "default", name: "Default" },
   { provider: "magpie", id: "cursor/grok-4.7@500k", name: "Grok" },
@@ -33,7 +34,7 @@ beforeEach(async () => {
   settingsPath = path.join(directory, "settings.json");
   writeDefault("default");
   fs.writeFileSync(path.join(directory, "model-aliases.json"), JSON.stringify({ Ag: "qq/silver" }));
-  ctx = { cwd: directory, mode: "print", ui: { notify, custom }, modelRegistry: { getAvailable: available } } as unknown as ExtensionCommandContext;
+  ctx = { cwd: directory, mode: "print", ui: { notify, custom }, modelRegistry: { getAvailable: available }, reload } as unknown as ExtensionCommandContext;
   register(api as unknown as ExtensionAPI);
   command = api.registerCommand.mock.calls[0]![1];
   await emit("session_start");
@@ -89,7 +90,8 @@ describe("模型别名命令与联动触发", () => {
     await command.handler("Argentum MAGPIE/CURSOR/GROK-4.7@500K", ctx);
     expect(aliasStore.get("Ag")).toBe("magpie/cursor/grok-4.7@500k");
     expect(readDefault()).toBe("cursor/grok-4.7@500k");
-    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("默认模型已同步"), "info");
+    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("默认配置已保存，正在重新加载"), "info");
+    expect(reload).toHaveBeenCalledTimes(1);
     await emit("input");
     expect(notify).toHaveBeenCalledTimes(1);
   });
@@ -98,6 +100,7 @@ describe("模型别名命令与联动触发", () => {
     await command.handler(`${tier} magpie/cursor/grok-4.7@500k`, ctx);
     expect(readDefault()).toBe("default");
     expect(aliasStore.get("Ag")).toBe("qq/silver");
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("TUI 模式也通过共同绑定路径更新 Ag 和默认模型", async () => {
@@ -106,7 +109,23 @@ describe("模型别名命令与联动触发", () => {
     await command.handler("", ctx);
     expect(aliasStore.get("Ag")).toBe("magpie/cursor/grok-4.7@500k");
     expect(readDefault()).toBe("cursor/grok-4.7@500k");
-    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("默认模型已同步"), "info");
+    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("默认配置已保存，正在重新加载"), "info");
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("默认配置已经一致时仍重载，使旧运行时内存读到最新默认模型", async () => {
+    fs.writeFileSync(settingsPath, JSON.stringify({ defaultProvider: "magpie", defaultModel: "cursor/grok-4.7@500k" }));
+    await command.handler("Ag magpie/cursor/grok-4.7@500k", ctx);
+    await command.handler("Ag magpie/cursor/grok-4.7@500k", ctx);
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("reload 失败向上传递错误，通知只说明保存配置，且不再操作旧 ctx", async () => {
+    reload.mockRejectedValueOnce(new Error("模拟 reload 失败"));
+    await expect(command.handler("Ag magpie/cursor/grok-4.7@500k", ctx)).rejects.toThrow("模拟 reload 失败");
+    expect(aliasStore.get("Ag")).toBe("magpie/cursor/grok-4.7@500k");
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("正在重新加载"), "info");
   });
 
   it("TUI 中取消或选择后模型已不可用则不绑定", async () => {
@@ -126,6 +145,7 @@ describe("模型别名命令与联动触发", () => {
     expect(aliasStore.get("Ag")).toBe("magpie/cursor/grok-4.7@500k");
     expect(fs.readFileSync(settingsPath, "utf-8")).toBe("{broken");
     expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("默认模型未同步"), "info");
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("别名绑定写入失败不更新默认模型", async () => {
@@ -135,6 +155,7 @@ describe("模型别名命令与联动触发", () => {
     await command.handler("Ag magpie/cursor/grok-4.7@500k", ctx);
     expect(readDefault()).toBe("default");
     expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("绑定失败"), "error");
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("无效格式和未知模型不产生绑定", async () => {
