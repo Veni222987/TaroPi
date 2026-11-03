@@ -44,7 +44,6 @@ interface UsageTotals {
 }
 
 let sessionStartTime = 0;
-let turnIndex = 0;
 let modelProvider = "";
 let modelId = "";
 let cwd = "";
@@ -156,6 +155,13 @@ function fmtDuration(milliseconds: number): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
+// formatUsageSummary 拼出 Token 用量、缓存命中率和可选会话时长。
+export function formatUsageSummary(tokens: number, hitRatePercent: number, elapsedMs?: number): string {
+  const summary = `${c(I_TOK, CYAN)} ${c(fmtTokens(tokens), FG)} ${c(I_HIT, PURPLE)} ${c(`${hitRatePercent.toFixed(0)}%`, FG)}`;
+  if (elapsedMs === undefined || !Number.isFinite(elapsedMs) || elapsedMs < 0) return summary;
+  return `${summary} ${c(I_CLOCK, COMMENT)} ${c(fmtDuration(elapsedMs), COMMENT)}`;
+}
+
 async function getGit(directory: string): Promise<GitStatus | null> {
   if (!directory) return null;
   try {
@@ -231,10 +237,6 @@ async function buildHud(ctx: ExtensionContext): Promise<string[]> {
     if (details.length > 0) gitText += ` ${details.join(" ")}`;
     parts.push(gitText);
   }
-  if (sessionStartTime > 0) {
-    if (turnIndex > 0) parts.push(`${c("↺ loop", PURPLE)} ${c(`×${turnIndex}`, FG)}`);
-    parts.push(`${c(I_CLOCK, COMMENT)} ${c(fmtDuration(Date.now() - sessionStartTime), COMMENT)}`);
-  }
   parts.push(formatModel());
 
   try {
@@ -250,7 +252,8 @@ async function buildHud(ctx: ExtensionContext): Promise<string[]> {
       parts.push(contextText);
       const cacheTotal = cumInputTokens + cumCacheReadTokens + cumCacheWriteTokens;
       const cacheHitRate = cacheTotal > 0 ? (cumCacheReadTokens / cacheTotal) * 100 : 0;
-      parts.push(`${c(I_TOK, CYAN)} ${c(fmtTokens(usage.tokens ?? 0), FG)} ${c(I_HIT, PURPLE)} ${c(`${cacheHitRate.toFixed(0)}%`, FG)}`);
+      const elapsed = sessionStartTime > 0 ? Date.now() - sessionStartTime : undefined;
+      parts.push(formatUsageSummary(usage.tokens ?? 0, cacheHitRate, elapsed));
     }
   } catch {
     // 上下文用量暂不可用时保留其他基础信息。
@@ -437,7 +440,6 @@ export function registerHud(pi: ExtensionAPI): void {
     if (pendingHudResume) clearTimeout(pendingHudResume);
     pendingHudResume = undefined;
     sessionStartTime = Date.now();
-    turnIndex = 0;
     cwd = ctx.cwd;
     agentRunActive = false;
     waitingForUser = false;
@@ -460,11 +462,6 @@ export function registerHud(pi: ExtensionAPI): void {
     latestCtx = ctx;
     modelProvider = event.model?.provider ?? "";
     modelId = event.model?.id ?? "";
-    void refreshHud(ctx);
-  });
-  pi.on("turn_start", (event, ctx) => {
-    latestCtx = ctx;
-    turnIndex = event.turnIndex;
     void refreshHud(ctx);
   });
   pi.on("turn_end", (event, ctx) => {

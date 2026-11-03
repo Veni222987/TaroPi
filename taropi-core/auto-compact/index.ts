@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHudClient } from "taropi-hud/api";
 import { compactUsingCuprum } from "./compactor.ts";
 import { AutoCompactRuntime } from "./scheduler.ts";
+import { formatAutoCompactHud, readCompactionStats, type CompactionStats } from "./stats.ts";
 import { AUTO_COMPACT_ENTRY, formatRulesStatus, type AutoCompactRule } from "./types.ts";
 import { AutoCompactPanel } from "./ui.ts";
 
@@ -10,14 +11,18 @@ export function registerAutoCompact(pi: ExtensionAPI): void {
   const runtime = new AutoCompactRuntime((rules) => {
     pi.appendEntry(AUTO_COMPACT_ENTRY, { rules });
   });
+  let compactionStats: CompactionStats = { count: 0 };
+  const rememberCompactions = (ctx: { sessionManager: { getBranch(): readonly { type?: string; timestamp?: string }[] } }) => {
+    compactionStats = readCompactionStats(ctx.sessionManager.getBranch());
+  };
   const hud = createHudClient(pi);
   hud.register({
     key: "auto-compact",
     refresh: () => undefined,
     render(_state, theme) {
-      const enabled = runtime.snapshot().filter((rule) => rule.enabled);
-      if (enabled.length === 0) return [];
-      return [`${theme.c("🗜 auto-compact", theme.CYAN)} ${theme.dim(formatRulesStatus(enabled))}`];
+      const text = formatAutoCompactHud(runtime.snapshot(), compactionStats);
+      if (!text) return [];
+      return [`${theme.c("🗜 auto-compact", theme.CYAN)} ${theme.dim(text)}`];
     },
   });
 
@@ -54,6 +59,7 @@ export function registerAutoCompact(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     runtime.restore(ctx);
+    rememberCompactions(ctx);
     hud.render();
   });
   pi.on("session_shutdown", () => runtime.stop());
@@ -63,6 +69,14 @@ export function registerAutoCompact(pi: ExtensionAPI): void {
   pi.on("ui_prompt_start", () => runtime.onPrompt(true));
   pi.on("ui_prompt_end", (_event, ctx) => runtime.onPrompt(false, ctx));
   pi.on("session_before_compact", (event, ctx) => compactUsingCuprum(event, ctx));
-  pi.on("session_compact", (_event, ctx) => runtime.onCompactFinished(ctx));
+  pi.on("session_compact", (_event, ctx) => {
+    runtime.onCompactFinished(ctx);
+    rememberCompactions(ctx);
+    hud.render();
+  });
+  pi.on("session_tree", (_event, ctx) => {
+    rememberCompactions(ctx);
+    hud.render();
+  });
   pi.on("session_compact_failed", (_event, ctx) => runtime.onCompactFinished(ctx));
 }
