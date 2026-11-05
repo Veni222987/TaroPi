@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatAutoCompactHud, formatCompactionTime, readCompactionStats } from "./stats.ts";
+import type { RegistryEntry } from "./registry.ts";
+import { formatAutoCompactHud, formatCompactionTime, formatOfflineStatus, readCompactionStats } from "./stats.ts";
 import type { AutoCompactRule } from "./types.ts";
 
 const idle: AutoCompactRule = { id: "idle", enabled: true, type: "idle", value: 1, unit: "h" };
@@ -37,5 +38,33 @@ describe("压缩统计", () => {
     expect(formatAutoCompactHud([], { count: 3, lastAt: yesterday }, now)).toBe("上次 11-02 14:32 · 压缩 3 次 · 无策略");
     expect(formatAutoCompactHud([disabled], { count: 0 }, now)).toBe("");
     expect(formatAutoCompactHud([], { count: 2 }, now)).toBe("压缩 2 次 · 无策略");
+  });
+});
+
+function entry(sessionId: string, nextAt: number | null): RegistryEntry {
+  return {
+    version: 1,
+    sessionId,
+    cwd: "/work/a",
+    updatedAt: now,
+    rules: [{ id: "e", enabled: true, type: "every", value: 30, unit: "m", nextAt }],
+  };
+}
+
+describe("离线压缩状态", () => {
+  it("没有会话时只说明 cron 状态", () => {
+    expect(formatOfflineStatus({ cronInstalled: true, entries: [] }, now)).toBe("离线压缩扫描任务已安装；没有登记待压缩会话");
+    expect(formatOfflineStatus({ cronInstalled: false, entries: [] }, now)).toContain("未安装");
+  });
+
+  it("列出会话、目录与到期时间", () => {
+    const text = formatOfflineStatus({
+      cronInstalled: true,
+      entries: [entry("abcdef123456", now + 3_600_000), entry("zzz", now - 1), entry("pending", null)],
+    }, now);
+    expect(text.split("\n")[0]).toBe("离线压缩扫描任务已安装；共 3 个会话");
+    expect(text).toContain("abcdef12 /work/a 下次 16:00");
+    expect(text).toContain("zzz /work/a 已到期");
+    expect(text).toContain("pending /work/a 无可调度策略");
   });
 });

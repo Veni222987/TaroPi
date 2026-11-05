@@ -14,6 +14,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 🎛️ 工具行渲染 | 内置 `pi-compact-tools`，`/compact-tools` 切换 Compact / Claude / Codex / 原生样式，`/silent` 或 `Ctrl+'` 切换静默显示；只改界面，不改工具执行或模型上下文 |
 | 📦 会话归档 | `/archive` — 可带自定义标题，如 `/archive 排查xx问题`；旧内容另存为可搜索恢复的新 id 会话，当前 id、路径和名称保留，上下文清空；活动 plan 自动终止，详见 [归档说明](archive/README.md) |
 | 🥈 模型别名 | `/model-alias` — 管理 Au / Ag / Cu 三档绑定；Ag 与全局默认模型双向联动，启动或恢复时不对齐，不切换当前会话模型 |
+| 🗜 自动压缩 | `/auto-compact` — 按 every / idle / cron 策略定时压缩，压缩请求交给铜牌模型；`/auto-compact-cron` 查看或移除离线扫描任务，会话关闭后仍能到点压缩 |
 | 🔒 权限管控 | 敏感文件保护、cwd 外写入二次确认、禁止 `rm` 命令 |
 | 🌐 网络访问 | 网页搜索（Brave/Exa/OpenAI）、URL 正文抓取、GitHub 仓库/文件、图片、本地 PDF 文本提取 |
 | 🖥️ HUD 状态面板 | 常驻显示 Git、模型/上下文/Token 用量，会话时长紧跟命中率，不显示对话轮数；以及本机已加载 HUD 的交互会话目录状态。idle 表示等待用户，working 表示模型、工具或自动处理执行中。auto-compact 子版块先显示上次压缩时间（当天 `HH:mm`，其他日期 `MM-DD HH:mm`）和当前分支压缩次数，策略放在后面；没有启用策略但有压缩记录时仍显示。外部包可通过 `taropi-hud` 注册带刷新能力的文本子版块，`/hud-fresh` 并发刷新全部子版块 |
@@ -67,6 +68,23 @@ Pi 原生 `SYSTEM.md`、`--system-prompt` 或其他扩展的强制完整提示�
 - 联动不主动切换当前会话模型，不清空或重写已有对话。Ag 绑定后的自动 reload 会重新加载扩展、skills、提示词、工具及配置；若这些资源有变化，下一次请求的提示词/工具缓存前缀可能失效，并可能触发其他扩展的启动逻辑。新会话读取更新后的默认模型。
 - 项目级 `.pi/settings.json` 的默认模型覆盖不参与联动，实际启动模型仍遵循 Pi 的项目配置优先规则。手动编辑 Ag 文件不触发反向同步，需要通过 `/model-alias` 绑定。
 - 配置读取或写入失败会明确提示，损坏的默认配置不会被覆盖，也不会触发自动 reload。若 Ag 已绑定但默认模型同步失败，修复配置后重新执行绑定即可重试。重载前只提示“默认配置已保存，正在重新加载”，不提前宣称运行时已同步；重载失败由 Pi 报错，可手动 `/reload` 重试。
+
+### 自动压缩与离线压缩
+
+`/auto-compact` 打开策略面板，支持三种策略：`every`（每隔固定时长）、`idle`（闲置固定时长后）、`cron`（5 段表达式）；`/auto-compact status` 查看、`/auto-compact clear` 清空。策略随会话记录保存在当前分支上，压缩请求统一交给铜牌模型（Cu），未配置时回退到会话模型。
+
+会话一旦保存或恢复到启用策略，就会把“下一次压缩时间”写入全局注册表，并幂等安装一条每分钟执行的系统 crontab（行尾标记 `# taropi:auto-compact-scanner`）：
+
+| 项 | 位置 |
+|------|------|
+| 注册表 | `~/.pi/agent/taropi/auto-compact/sessions/<sessionId>.json` |
+| 会话心跳 | `$XDG_RUNTIME_DIR/taropi-liveness/<sessionId>.json` |
+| 扫描锁 | `~/.pi/agent/taropi/auto-compact/scanner.lock` |
+| 扫描日志 | `~/.pi/agent/taropi/auto-compact/scanner.log` |
+
+扫描器（`auto-compact/scanner.ts`）纯规则判断，不调用大模型：清理失效条目 → 挑出到期且没有活动心跳的会话 → 以会话目录拉起 `pi --session <id> --mode rpc`，发送 `{"type":"compact"}`。会话还有进程在跑时直接跳过，由活跃会话的进程内调度处理。`/auto-compact-cron status` 查看任务与会话列表，`/auto-compact-cron remove` 移除任务（不自动卸载）。
+
+已知限制：心跳由 taropi-core 写入，用 `--no-extensions` 打开的会话没有心跳，极端情况下可能与扫描器并发压缩同一个会话；`every` 离线触发按“当前时间 + 间隔”推进，不补错过的历史次数；扫描日志不轮转。
 
 ### 权限管控（可选）
 

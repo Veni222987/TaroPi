@@ -1,7 +1,11 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { hudTheme } from "taropi-hud/theme";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAutoCompact } from "./index.ts";
+import { readRegistryEntry } from "./registry.ts";
 import { AUTO_COMPACT_ENTRY } from "./types.ts";
 
 const hud = vi.hoisted(() => {
@@ -32,6 +36,18 @@ vi.mock("taropi-hud/api", () => ({
   createHudClient: (owner: unknown) => hud.bind(owner),
 }));
 
+const offline = vi.hoisted(() => ({
+  ensureCron: vi.fn(async () => ({ status: "created" as const })),
+  cronInstalled: vi.fn(async () => true),
+  removeCron: vi.fn(async () => ({ status: "removed" as const })),
+}));
+
+vi.mock("./crontab.ts", () => ({
+  ensureScannerCron: offline.ensureCron,
+  hasScannerCron: offline.cronInstalled,
+  removeScannerCron: offline.removeCron,
+}));
+
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 type Command = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 
@@ -47,12 +63,12 @@ function hudText(owner: unknown): string {
 
 function setup() {
   const hooks = new Map<string, Handler>();
-  let command: Command | undefined;
+  const commands = new Map<string, Command>();
   const appendEntry = vi.fn();
   const api = {
     appendEntry,
-    registerCommand: vi.fn((_name: string, registered: { handler: Command }) => {
-      command = registered.handler;
+    registerCommand: vi.fn((name: string, registered: { handler: Command }) => {
+      commands.set(name, registered.handler);
     }),
     on: vi.fn((event: string, handler: Handler) => {
       hooks.set(event, handler);
@@ -69,12 +85,33 @@ function setup() {
     isIdle: () => true,
     hasPendingMessages: () => false,
     compact: vi.fn(),
-    sessionManager: { getBranch: () => [] },
+    sessionManager: {
+      getBranch: () => [],
+      getSessionId: () => "sess-1",
+      getCwd: () => "/work/a",
+      getSessionFile: () => "/sessions/a.jsonl",
+    },
   } as unknown as ExtensionCommandContext;
-  return { hooks, command: command!, appendEntry, notify, custom, ctx, client, api };
+  return { hooks, command: commands.get("auto-compact")!, cronCommand: commands.get("auto-compact-cron")!, appendEntry, notify, custom, ctx, client, api };
 }
 
-afterEach(() => vi.useRealTimers());
+let agentDir: string;
+let runtimeDir: string;
+
+beforeEach(async () => {
+  agentDir = await mkdtemp(join(tmpdir(), "taropi-index-agent-"));
+  runtimeDir = await mkdtemp(join(tmpdir(), "taropi-index-runtime-"));
+  vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+  vi.stubEnv("XDG_RUNTIME_DIR", runtimeDir);
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  vi.unstubAllEnvs();
+  await rm(agentDir, { recursive: true, force: true });
+  await rm(runtimeDir, { recursive: true, force: true });
+});
 
 describe("/auto-compact 注册", () => {
   it("打开面板后把编辑结果写入当前会话", async () => {
@@ -154,5 +191,46 @@ describe("/auto-compact 注册", () => {
     expect(compactUsingCuprum).toHaveBeenCalledOnce();
     harness.hooks.get("session_shutdown")!({}, harness.ctx);
     expect(harness.ctx.compact).not.toHaveBeenCalled();
+  });
+
+  it("启动时把策略写入离线注册表并安装 cron", async () => {
+    const harness = setup();
+    harness.ctx.sessionManager.getBranch = () => [
+      { type: "custom", customType: AUTO_COMPACT_ENTRY, data: { rules: [{ id: "every", enabled: true, type: "every", value: 30, unit: "m" }] } },
+    ] as never;
+    await harness.hooks.get("session_start")!({}, harness.ctx);
+    await vi.waitFor(async () => {
+      expect(await readRegistryEntry("sess-1")).toBeDefined();
+    });
+    expect(offline.ensureCron).toHaveBeenCalled();
+    harness.hooks.get("session_shutdown")!({}, harness.ctx);
+  });
+
+  it("clear 后从注册表移除，压缩完成推进下一次时间", async () => {
+    const harness = setup();
+    harness.ctx.sessionManager.getBranch = () => [
+      { type: "custom", customType: AUTO_COMPACT_ENTRY, data: { rules: [{ id: "every", enabled: true, type: "every", value: 30, unit: "m" }] } },
+    ] as never;
+    await harness.hooks.get("session_start")!({}, harness.ctx);
+    await vi.waitFor(async () => expect(await readRegistryEntry("sess-1")).toBeDefined());
+    const before = (await readRegistryEntry("sess-1"))!.rules[0]!.nextAt;
+    await harness.hooks.get("session_compact")!({}, harness.ctx);
+    await vi.waitFor(async () => {
+      expect((await readRegistryEntry("sess-1"))!.rules[0]!.nextAt).not.toBe(before);
+    });
+    await harness.command("clear", harness.ctx);
+    await vi.waitFor(async () => expect(await readRegistryEntry("sess-1")).toBeUndefined());
+    harness.hooks.get("session_shutdown")!({}, harness.ctx);
+  });
+
+  it("/auto-compact-cron 显示状态并支持 remove", async () => {
+    const harness = setup();
+    await harness.cronCommand("status", harness.ctx);
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining("离线压缩扫描任务"), "info");
+    await harness.cronCommand("remove", harness.ctx);
+    expect(offline.removeCron).toHaveBeenCalled();
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining("已移除"), "info");
+    await harness.cronCommand("oops", harness.ctx);
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining("用法"), "warning");
   });
 });

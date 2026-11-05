@@ -9,7 +9,18 @@ export interface AutoCompactHost {
   hasPendingMessages(): boolean;
   compact(options?: CompactOptions): void;
   ui: { notify(message: string, level?: "info" | "warning" | "error"): void };
-  sessionManager: { getBranch(): readonly { type?: string; customType?: string; data?: unknown }[] };
+  sessionManager: {
+    getBranch(): readonly { type?: string; customType?: string; data?: unknown }[];
+    getSessionId(): string;
+    getCwd(): string;
+    getSessionFile(): string | undefined;
+  };
+}
+
+export interface AutoCompactHooks {
+  onRulesSaved?: (rules: AutoCompactRule[], ctx: AutoCompactHost) => void;
+  onActivity?: (ctx: AutoCompactHost) => void;
+  onCompacted?: (ctx: AutoCompactHost) => void;
 }
 
 // AutoCompactRuntime 按会话策略调度 every / idle / cron，忙时只记下待补压缩。
@@ -26,7 +37,10 @@ export class AutoCompactRuntime {
   private idleLatched = false;
   private restored = false;
 
-  constructor(private readonly persist: (rules: AutoCompactRule[]) => void) {}
+  constructor(
+    private readonly persist: (rules: AutoCompactRule[]) => void,
+    private readonly hooks: AutoCompactHooks = {},
+  ) {}
 
   // restore 从当前分支恢复策略并重新计时；新会话没有记录时为空。
   restore(ctx: AutoCompactHost): void {
@@ -54,6 +68,7 @@ export class AutoCompactRuntime {
     this.rules = rules.map((rule) => ({ ...rule }));
     this.persist(this.rules);
     this.reschedule();
+    if (this.ctx) this.hooks.onRulesSaved?.(this.snapshot(), this.ctx);
   }
 
   snapshot(): AutoCompactRule[] {
@@ -74,6 +89,7 @@ export class AutoCompactRuntime {
     this.dirty = true;
     this.idleLatched = false;
     this.clearIdleTimers();
+    this.hooks.onActivity?.(ctx);
   }
 
   onBusy(ctx: AutoCompactHost): void {
@@ -101,6 +117,12 @@ export class AutoCompactRuntime {
     if (ctx) this.ctx = ctx;
     this.inflight = false;
     this.flush();
+  }
+
+  // onCompacted 在压缩成功后同步离线注册表的下一次压缩时间。
+  onCompacted(ctx?: AutoCompactHost): void {
+    if (ctx) this.ctx = ctx;
+    if (this.ctx) this.hooks.onCompacted?.(this.ctx);
   }
 
   private reschedule(): void {
@@ -198,7 +220,12 @@ export class AutoCompactRuntime {
   private isBlocked(): boolean {
     const ctx = this.ctx;
     if (!ctx) return true;
-    return this.prompts > 0 || this.streaming || !ctx.isIdle() || ctx.hasPendingMessages();
+    try {
+      return this.prompts > 0 || this.streaming || !ctx.isIdle() || ctx.hasPendingMessages();
+    } catch {
+      // 会话被替换或重载后旧 ctx 会失效，此时按阻塞处理，等下个事件重新拿上下文。
+      return true;
+    }
   }
 
   private clearIdleTimers(): void {

@@ -1,4 +1,6 @@
+import { nextDueAt, type RegistryEntry } from "./registry.ts";
 import { formatRulesStatus, type AutoCompactRule } from "./types.ts";
+
 
 export interface CompactionStats {
   count: number;
@@ -48,4 +50,21 @@ export function formatAutoCompactHud(rules: readonly AutoCompactRule[], stats: C
 
 function pad(value: number): string {
   return value.toString().padStart(2, "0");
+}
+
+export interface OfflineStatusView {
+  cronInstalled: boolean;
+  entries: readonly RegistryEntry[];
+}
+
+// formatOfflineStatus 生成 /auto-compact-cron 的状态文本。
+export function formatOfflineStatus(status: OfflineStatusView, now = Date.now()): string {
+  const cron = status.cronInstalled ? "已安装" : "未安装";
+  if (status.entries.length === 0) return `离线压缩扫描任务${cron}；没有登记待压缩会话`;
+  const lines = status.entries.map((entry) => {
+    const due = nextDueAt(entry);
+    const dueText = due === undefined ? "无可调度策略" : due <= now ? "已到期" : `下次 ${formatCompactionTime(due, now)}`;
+    return `${entry.sessionId.slice(0, 8)} ${entry.cwd} ${dueText}`;
+  });
+  return [`离线压缩扫描任务${cron}；共 ${status.entries.length} 个会话`, ...lines].join("\n");
 }
