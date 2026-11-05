@@ -19,6 +19,7 @@ export interface OfflineSyncHost {
     getSessionId(): string;
     getCwd(): string;
     getSessionFile(): string | undefined;
+    getSessionName?(): string | undefined;
   };
 }
 
@@ -45,7 +46,7 @@ export class OfflineCompactSync {
   private readonly warn: (message: string) => void;
   private readonly now: () => number;
   private queue: Promise<void> = Promise.resolve();
-  private target: { sessionId: string; cwd: string; sessionFile?: string } | undefined;
+  private target: { sessionId: string; cwd: string; name?: string; sessionFile?: string } | undefined;
 
   constructor(deps: OfflineSyncDeps = {}) {
     this.liveness = deps.liveness ?? new SessionLiveness();
@@ -71,7 +72,7 @@ export class OfflineCompactSync {
     return this.syncRules(rules);
   }
 
-  // recordActivity 在会话活动后重新武装闲置策略。
+  // recordActivity 在会话活动后重新武装闲置策略，并刷新会话名与目录。
   recordActivity(ctx: OfflineSyncHost): Promise<void> {
     this.target = readTarget(ctx);
     return this.enqueue(async () => {
@@ -80,7 +81,10 @@ export class OfflineCompactSync {
       const entry = await readRegistryEntry(target.sessionId);
       if (!entry || !hasEnabledRules(entry.rules)) return;
       const now = this.now();
-      await writeRegistryEntry({ ...entry, updatedAt: now, lastActiveAt: now, rules: armRegistryRules(entry.rules, now) });
+      const updated: RegistryEntry = { ...entry, cwd: target.cwd, updatedAt: now, lastActiveAt: now, rules: armRegistryRules(entry.rules, now) };
+      if (target.name) updated.name = target.name;
+      if (target.sessionFile) updated.sessionFile = target.sessionFile;
+      await writeRegistryEntry(updated);
     });
   }
 
@@ -138,6 +142,7 @@ export class OfflineCompactSync {
         lastActiveAt: now,
         rules: resumeRegistryRules(previous?.rules, rules, now),
       };
+      if (target.name) entry.name = target.name;
       if (target.sessionFile) entry.sessionFile = target.sessionFile;
       await writeRegistryEntry(entry);
       await this.ensureCronSafely();
@@ -164,10 +169,14 @@ export class OfflineCompactSync {
   }
 }
 
-function readTarget(ctx: OfflineSyncHost): { sessionId: string; cwd: string; sessionFile?: string } | undefined {
+function readTarget(ctx: OfflineSyncHost): { sessionId: string; cwd: string; name?: string; sessionFile?: string } | undefined {
   const sessionId = ctx.sessionManager.getSessionId();
   const cwd = ctx.sessionManager.getCwd();
   if (!sessionId || !cwd) return undefined;
+  const target: { sessionId: string; cwd: string; name?: string; sessionFile?: string } = { sessionId, cwd };
+  const name = ctx.sessionManager.getSessionName?.();
+  if (name) target.name = name;
   const sessionFile = ctx.sessionManager.getSessionFile();
-  return sessionFile ? { sessionId, cwd, sessionFile } : { sessionId, cwd };
+  if (sessionFile) target.sessionFile = sessionFile;
+  return target;
 }

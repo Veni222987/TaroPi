@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { nextDueAt, type RegistryEntry } from "./registry.ts";
 import { formatRulesStatus, type AutoCompactRule } from "./types.ts";
 
@@ -57,14 +58,23 @@ export interface OfflineStatusView {
   entries: readonly RegistryEntry[];
 }
 
-// formatOfflineStatus 生成 /auto-compact-cron 的状态文本。
+// formatOfflineStatus 生成 /auto-compact-cron 的状态文本，只列未到期的会话。
 export function formatOfflineStatus(status: OfflineStatusView, now = Date.now()): string {
   const cron = status.cronInstalled ? "已安装" : "未安装";
-  if (status.entries.length === 0) return `离线压缩扫描任务${cron}；没有登记待压缩会话`;
-  const lines = status.entries.map((entry) => {
+  const pending = status.entries.filter((entry) => {
     const due = nextDueAt(entry);
-    const dueText = due === undefined ? "无可调度策略" : due <= now ? "已到期" : `下次 ${formatCompactionTime(due, now)}`;
-    return `${entry.sessionId.slice(0, 8)} ${entry.cwd} ${dueText}`;
+    return due !== undefined && due > now;
   });
-  return [`离线压缩扫描任务${cron}；共 ${status.entries.length} 个会话`, ...lines].join("\n");
+  if (pending.length === 0) return `离线压缩扫描任务${cron}；没有待压缩会话`;
+  const lines = pending.map((entry) => `${formatSessionLabel(entry)} · 下次 ${formatCompactionTime(nextDueAt(entry) as number, now)}`);
+  return [`离线压缩扫描任务${cron}；共 ${pending.length} 个会话`, ...lines].join("\n");
+}
+
+const SESSION_LABEL_LIMIT = 20;
+
+// formatSessionLabel 取会话名并截断到 20 字，没有名字时回退到目录名。
+export function formatSessionLabel(entry: RegistryEntry): string {
+  const source = entry.name?.trim() || basename(entry.cwd) || entry.sessionId.slice(0, 8);
+  const chars = [...source];
+  return chars.length <= SESSION_LABEL_LIMIT ? source : `${chars.slice(0, SESSION_LABEL_LIMIT - 1).join("")}…`;
 }

@@ -58,6 +58,13 @@ describe("离线压缩注册表", () => {
     expect(second?.rules.map((rule) => rule.id)).toEqual(["i"]);
   });
 
+  it("会话名随条目存取，缺失时仍有效", async () => {
+    await writeRegistryEntry({ ...entry(buildRegistryRules([every], now)), name: "PC互动表态兼容" });
+    expect((await readRegistryEntry("sess-1"))?.name).toBe("PC互动表态兼容");
+    await writeRegistryEntry(entry(buildRegistryRules([every], now), "sess-2"));
+    expect((await readRegistryEntry("sess-2"))?.name).toBeUndefined();
+  });
+
   it("损坏文件被跳过，删除不存在的条目不报错", async () => {
     await mkdir(join(getRegistryDirectory(), "sessions"), { recursive: true });
     await writeFile(join(getRegistryDirectory(), "sessions", "broken.json"), "{not json", "utf8");

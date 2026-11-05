@@ -20,6 +20,8 @@ export interface RegistryEntry {
   version: 1;
   sessionId: string;
   cwd: string;
+  /** 会话显示名，取自 Pi 的 session_info，缺失时状态文本回退目录名。 */
+  name?: string;
   sessionFile?: string;
   updatedAt: number;
   /** 最后一次会话活动时间，仅作诊断信息。 */
@@ -190,6 +192,7 @@ function parseRegistryEntry(value: unknown): RegistryEntry | undefined {
     return [{ ...normalized, nextAt: typeof nextAt === "number" && Number.isFinite(nextAt) ? nextAt : null }];
   });
   const entry: RegistryEntry = { version: REGISTRY_VERSION, sessionId, cwd, updatedAt, rules };
+  if (typeof raw.name === "string" && raw.name) entry.name = raw.name;
   if (typeof raw.sessionFile === "string" && raw.sessionFile) entry.sessionFile = raw.sessionFile;
   if (typeof raw.lastActiveAt === "number" && Number.isFinite(raw.lastActiveAt)) entry.lastActiveAt = raw.lastActiveAt;
   return entry;

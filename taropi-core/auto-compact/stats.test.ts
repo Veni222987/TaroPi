@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RegistryEntry } from "./registry.ts";
-import { formatAutoCompactHud, formatCompactionTime, formatOfflineStatus, readCompactionStats } from "./stats.ts";
+import { formatAutoCompactHud, formatCompactionTime, formatOfflineStatus, formatSessionLabel, readCompactionStats } from "./stats.ts";
 import type { AutoCompactRule } from "./types.ts";
 
 const idle: AutoCompactRule = { id: "idle", enabled: true, type: "idle", value: 1, unit: "h" };
@@ -41,30 +41,45 @@ describe("压缩统计", () => {
   });
 });
 
-function entry(sessionId: string, nextAt: number | null): RegistryEntry {
+function entry(sessionId: string, nextAt: number | null, extra: Partial<RegistryEntry> = {}): RegistryEntry {
   return {
     version: 1,
     sessionId,
     cwd: "/work/a",
     updatedAt: now,
     rules: [{ id: "e", enabled: true, type: "every", value: 30, unit: "m", nextAt }],
+    ...extra,
   };
 }
 
 describe("离线压缩状态", () => {
   it("没有会话时只说明 cron 状态", () => {
-    expect(formatOfflineStatus({ cronInstalled: true, entries: [] }, now)).toBe("离线压缩扫描任务已安装；没有登记待压缩会话");
+    expect(formatOfflineStatus({ cronInstalled: true, entries: [] }, now)).toBe("离线压缩扫描任务已安装；没有待压缩会话");
     expect(formatOfflineStatus({ cronInstalled: false, entries: [] }, now)).toContain("未安装");
   });
 
-  it("列出会话、目录与到期时间", () => {
+  it("只列未到期会话，显示会话名与时间", () => {
     const text = formatOfflineStatus({
       cronInstalled: true,
-      entries: [entry("abcdef123456", now + 3_600_000), entry("zzz", now - 1), entry("pending", null)],
+      entries: [
+        entry("abcdef123456", now + 3_600_000, { name: "PC互动表态兼容" }),
+        entry("zzz", now - 1, { name: "已跑完的会话" }),
+        entry("pending", null, { name: "没有策略" }),
+        entry("later", now + 7_200_000),
+      ],
     }, now);
-    expect(text.split("\n")[0]).toBe("离线压缩扫描任务已安装；共 3 个会话");
-    expect(text).toContain("abcdef12 /work/a 下次 16:00");
-    expect(text).toContain("zzz /work/a 已到期");
-    expect(text).toContain("pending /work/a 无可调度策略");
+    expect(text.split("\n")[0]).toBe("离线压缩扫描任务已安装；共 2 个会话");
+    expect(text).toContain("PC互动表态兼容 · 下次 16:00");
+    expect(text).toContain("a · 下次 17:00");
+    expect(text).not.toContain("已跑完的会话");
+    expect(text).not.toContain("没有策略");
+    expect(text).not.toContain("已到期");
+  });
+
+  it("会话名缺失时回退目录名，超长截断到 20 字", () => {
+    const long = "一二三四五六七八九十一二三四五六七八九十一二三";
+    expect(formatSessionLabel(entry("id", now + 1, { name: long }))).toBe(`${long.slice(0, 19)}…`);
+    expect(formatSessionLabel(entry("id", now + 1, { cwd: "/work/backend" }))).toBe("backend");
+    expect(formatSessionLabel(entry("abcdef123456", now + 1, { cwd: "" }))).toBe("abcdef12");
   });
 });
