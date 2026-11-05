@@ -71,7 +71,7 @@ Pi 原生 `SYSTEM.md`、`--system-prompt` 或其他扩展的强制完整提示�
 
 ### 自动压缩与离线压缩
 
-`/auto-compact` 打开策略面板，支持三种策略：`every`（每隔固定时长）、`idle`（闲置固定时长后）、`cron`（5 段表达式）；`/auto-compact status` 查看、`/auto-compact clear` 清空。策略随会话记录保存在当前分支上，压缩请求统一交给铜牌模型（Cu），未配置时回退到会话模型。
+`/auto-compact` 打开策略面板，支持三种策略：`every`（每隔固定时长）、`idle`（闲置固定时长后）、`cron`（5 段表达式）；`/auto-compact status` 查看、`/auto-compact clear` 清空。策略随会话记录保存在当前分支上，压缩请求统一交给铜牌模型（Cu），未配置时回退到会话模型。摘要正文固定要求使用简体中文，英文标题结构、代码、命令、路径与专有名词保持原文，避免英文摘要长期留在上下文里带偏后续对话语言。
 
 会话一旦保存或恢复到启用策略，就会把“下一次压缩时间”写入全局注册表，并幂等安装一条每分钟执行的系统 crontab（行尾标记 `# taropi:auto-compact-scanner`）：
 

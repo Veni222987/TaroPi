@@ -39,6 +39,22 @@ describe("铜牌模型压缩", () => {
     expect(typeof call?.[7]).toBe("function");
   });
 
+  it("在用户指令后追加简体中文摘要要求，无指令时只发要求", async () => {
+    const withUser = context();
+    const custom = vi.fn(async () => ({ summary: "摘要", firstKeptEntryId: "kept", tokensBefore: 10 }));
+    const userEvent = { ...event(), customInstructions: "重点保留部署步骤" } as SessionBeforeCompactEvent;
+    await compactUsingCuprum(userEvent, withUser, { resolveAlias: () => "qq/cuprum", compactImpl: custom });
+    const instructions = (custom.mock.calls[0] as unknown[])[4] as string;
+    expect(instructions.startsWith("重点保留部署步骤\n")).toBe(true);
+    expect(instructions).toContain("请用简体中文撰写摘要正文");
+
+    const noUser = context();
+    const bare = vi.fn(async () => ({ summary: "摘要", firstKeptEntryId: "kept", tokensBefore: 10 }));
+    await compactUsingCuprum(event(), noUser, { resolveAlias: () => "qq/cuprum", compactImpl: bare });
+    const bareInstructions = (bare.mock.calls[0] as unknown[])[4] as string;
+    expect(bareInstructions).toBe("请用简体中文撰写摘要正文；保留既定的英文标题结构，代码、命令、路径与专有名词保持原文。");
+  });
+
   it.each([
     ["未配置", undefined, "未配置铜牌模型"],
     ["找不到模型", "missing/model", "未找到铜牌模型"],

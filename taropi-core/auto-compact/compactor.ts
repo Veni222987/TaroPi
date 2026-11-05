@@ -3,6 +3,10 @@ import { resolveModelAlias } from "../model-alias/store.ts";
 
 type CompactFn = typeof compact;
 
+// COMPACTION_LANGUAGE_INSTRUCTION 要求摘要正文使用简体中文，保留英文模板标题与原文引用。
+const COMPACTION_LANGUAGE_INSTRUCTION =
+  "请用简体中文撰写摘要正文；保留既定的英文标题结构，代码、命令、路径与专有名词保持原文。";
+
 export interface CuprumCompactorDeps {
   resolveAlias?: (name: string) => string | undefined;
   compactImpl?: CompactFn;
@@ -28,6 +32,9 @@ export async function compactUsingCuprum(
     ctx.ui.notify(`未找到铜牌模型 ${alias}，回退会话模型压缩`, "warning");
     return undefined;
   }
+  const customInstructions = [event.customInstructions, COMPACTION_LANGUAGE_INSTRUCTION]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join("\n");
   try {
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) {
@@ -40,7 +47,7 @@ export async function compactUsingCuprum(
       requestModel,
       auth.apiKey,
       auth.headers as Record<string, string> | undefined,
-      event.customInstructions,
+      customInstructions,
       event.signal,
       ctx.thinkingLevel,
       (requestModel, context, options) => ctx.modelRegistry.streamSimple(requestModel, context, options),
