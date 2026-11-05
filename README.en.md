@@ -10,16 +10,12 @@ A personal collection of [pi coding agent](https://pi.dev) extensions (monorepo)
 flowchart LR
   PI[pi coding agent]
   CORE[taropi-core\ncore extension]
-  PLAIN[taropi-plain\nsystem prompt, agents, and skills]
+  PLAIN[taropi-plain\nagents and skills]
 
   PI --> CORE
   PI --> PLAIN
   CORE -.loads bundled agent definitions.-> PLAIN
 ```
-
-## Recommended Setup
-
-Before installing, copy the config files as described in [`taropi-plain/recommend/README.md`](./taropi-plain/recommend/README.md).
 
 ## Install
 
@@ -44,6 +40,6 @@ Run `/reload` or restart pi after installation.
 | Package | Description |
 |---------|-------------|
 | `taropi-core` | Core: subagent tools, permission control, Chinese response, web access, etc. |
-| `taropi-plain` | Plain-text resources: append system prompt, subagent definitions, skills, and recommended configuration |
+| `taropi-plain` | Plain-text resources: subagent definitions and skills |
 
 

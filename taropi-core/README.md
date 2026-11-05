@@ -6,8 +6,8 @@ TaroPi 整合包，一个入口加载所有核心能力。
 
 | 能力 | 说明 |
 |------|------|
-| 🧩 全局角色文本 | `../taropi-plain/PREAMBLE.md`：只替换 Pi 的前导角色文本；手动复制到 `~/.pi/agent/PREAMBLE.md` 后由本扩展加载，工具摘要、规则、skills 与项目上下文继续由 Pi 动态生成 |
-| 📝 追加系统提示词 | `../taropi-plain/APPEND_SYSTEM.md`：中文表达、工作方式与工具调用规则；按 `../taropi-plain/recommend/README.md` 复制后由 Pi 追加到默认提示词 |
+| 🧩 全局角色文本 | 读取 `~/.pi/agent/PREAMBLE.md`：只替换 Pi 的前导角色文本，工具摘要、规则、skills 与项目上下文继续由 Pi 动态生成 |
+| 📝 追加系统提示词 | Pi 原生 `APPEND_SYSTEM.md` 追加到默认提示词末尾，用于补充中文表达和工作方式规则 |
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
 | 📋 Plan Workflow | `/plan 任务描述` — 会话级三态（idle / planning / implementing）：只读调研 → 工具内真实用户确认 → 实施；状态与正文保存在同一个 Markdown frontmatter，支持中断、恢复、自然语言退出与手动切模型 |
@@ -43,7 +43,7 @@ make test
 
 ### 全局角色文本（PREAMBLE.md）
 
-`taropi-core` 在扩展初始化和 `session_start` 时读取 `getAgentDir()/PREAMBLE.md`，默认即 `~/.pi/agent/PREAMBLE.md`，并遵循 `PI_CODING_AGENT_DIR`。文件缺失、空白或无法读取时保持 Pi 默认角色文本；普通请求只使用已加载的缓存，修改后重启 Pi 或执行 `/reload` 生效。
+`taropi-core` 在扩展初始化和 `session_start` 时读取 `getAgentDir()/PREAMBLE.md`，默认即 `~/.pi/agent/PREAMBLE.md`，并遵循 `PI_CODING_AGENT_DIR`。文件由用户自己创建和维护，仓库不提供模板；缺失、空白或无法读取时保持 Pi 默认角色文本。普通请求只使用已加载的缓存，修改后重启 Pi 或执行 `/reload` 生效。
 
 该文件是 TaroPi 的扩展约定，不是 Pi 原生 SYSTEM 机制。它仅在请求阶段替换结构化 `preamble` 区块，不改变工具定义、工具可用性、工具摘要、规则、Pi 文档指引、skills、项目上下文、当前工作目录或 `APPEND_SYSTEM.md`。
 
@@ -228,11 +228,8 @@ TaroPi/
 │   ├── hud-adapt.ts      # core 内部模块接入 HUD 的统一适配层
 │   └── ...
 ├── taropi-hud/            # 可独立安装的 HUD 宿主、协议与外部开发 API
-├── taropi-plain/         # 纯文本资源：PREAMBLE / APPEND_SYSTEM / agents / skills / recommend
-    ├── PREAMBLE.md       # 前导角色文本模板；由 taropi-core 从 ~/.pi/agent/ 读取
-    ├── APPEND_SYSTEM.md  # 中文表达、工作方式与工具调用规则；按 recommend 配置到 ~/.pi/agent/ 后由 Pi 加载
+├── taropi-plain/         # 纯文本资源：agents / skills
     ├── agents/           # subagent 定义（scout / planner / developer / reviewer），会话启动时自动同步到 ~/.pi/agent/agents/
-    ├── recommend/        # 推荐配置及其安装说明
     └── skills/           # 可发现的 skill（SKILL.md）
 ```
 

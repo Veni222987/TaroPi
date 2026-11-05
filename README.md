@@ -11,7 +11,7 @@ flowchart LR
   PI[pi coding agent]
   CORE[taropi-core\n核心扩展]
   HUD[taropi-hud\n可扩展 HUD 宿主]
-  PLAIN[taropi-plain\n系统提示词、agents、skills]
+  PLAIN[taropi-plain\nagents、skills]
 
   PI --> CORE
   PI --> PLAIN
@@ -19,17 +19,13 @@ flowchart LR
   CORE -.读取内置 agent 定义.-> PLAIN
 ```
 
-## 推荐配置
-
-安装插件前，先按 [`taropi-plain/recommend/README.md`](./taropi-plain/recommend/README.md) 的说明将配置文件复制到对应位置。
-
 ## 全局角色文本（PREAMBLE.md）
 
-[`taropi-plain/PREAMBLE.md`](./taropi-plain/PREAMBLE.md) 是 `taropi-core` 的全局角色文本模板。手动复制到 Pi 配置目录的 `PREAMBLE.md` 后，启动 Pi 或执行 `/reload` 时由 `taropi-core` 读取：
+`PREAMBLE.md` 是用户自建的配置文件，仓库不提供模板。在 Pi 配置目录创建后，启动 Pi 或执行 `/reload` 时由 `taropi-core` 读取：
 
 ```bash
 mkdir -p ~/.pi/agent
-cp taropi-plain/PREAMBLE.md ~/.pi/agent/PREAMBLE.md
+$EDITOR ~/.pi/agent/PREAMBLE.md
 ```
 
 `PREAMBLE.md` 是 **TaroPi 扩展约定**，不是 Pi 原生提示词文件。它只替换系统提示词开头的角色文本；Pi 仍会按当前启用工具动态生成工具摘要和规则，并继续注入 Pi 文档指引、skills、`AGENTS.md` 项目上下文、当前工作目录和 `APPEND_SYSTEM.md`。
@@ -82,8 +78,8 @@ pi 会自动 clone 仓库并运行 `npm install`，`ask_user_question` 等所有
 
 | 包 | 说明 |
 |----|------|
-| `taropi-core` | 核心整合包：全局 PREAMBLE 角色替换、subagent 工具、权限管控、网络访问、向用户提问等；中文表达规则按推荐的 `APPEND_SYSTEM.md` 配置启用 |
+| `taropi-core` | 核心整合包：全局 PREAMBLE 角色替换、subagent 工具、权限管控、网络访问、向用户提问等；中文表达规则可用 Pi 的 `APPEND_SYSTEM.md` 追加 |
 | `taropi-hud` | 可扩展 HUD 宿主：基础状态面板、`/hud-fresh` 和外部子版块开发接口 |
-| `taropi-plain` | 纯文本资源目录：PREAMBLE、追加系统提示词、agents、skills 和推荐配置；内置 `diagram-drawio` skill，用 mcporter 调 drawio MCP 画图，首次使用先跑 `taropi-plain/skills/diagram-drawio/scripts/setup.sh`（含无头浏览器 chrome-headless-shell 安装到 `~/.local/bin`）；图源文件在 `~/.local/share/next-drawio/src`，导出文件在 `~/.local/share/next-drawio/exported` |
+| `taropi-plain` | 纯文本资源目录：agents 与 skills；内置 `diagram-drawio` skill，用 mcporter 调 drawio MCP 画图，首次使用先跑 `taropi-plain/skills/diagram-drawio/scripts/setup.sh`（含无头浏览器 chrome-headless-shell 安装到 `~/.local/bin`）；图源文件在 `~/.local/share/next-drawio/src`，导出文件在 `~/.local/share/next-drawio/exported` |
 
 <!-- test-passed: 2026 -->
