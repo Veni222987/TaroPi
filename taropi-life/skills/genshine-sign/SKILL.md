@@ -29,51 +29,49 @@ adb devices -l
 adb mdns services
 ```
 
-`192.168.2.24:33295` 已经是 `device`，就用它，不要再连一次。`unauthorized` 停下来告诉用户，不要重配。`mdns services` 里有别的 `_adb-tls-connect._tcp` 地址时，只用它给出的这一台地址，不要猜别的设备。
+`192.168.2.24:45587` 已经是 `device`，就用它，不要再连一次。`unauthorized` 停下来告诉用户，不要重配。`mdns services` 里有别的 `_adb-tls-connect._tcp` 地址时，只用它给出的这一台地址，不要猜别的设备。
 
 2. 没有 `device` 就按默认地址重连：
 
 ```bash
-adb connect 192.168.2.24:33295
+adb connect 192.168.2.24:45587
 adb devices -l
 ```
 
 连上且状态为 `device` 就继续。不要试 `5555`，也不要扫描其他端口。
 
-3. `adb connect` 失败时，先分清是平板不在线，还是这台电脑暂时没解析到它。用户处的路由器能看到 `192.168.2.24` 在线，不能拿一次 ping 失败就说平板关机或换了地址。先看本机是不是还在同一网段，再看 ARP：
+3. 连接失败不要立刻停。平板和端口都没变，但早上它可能要几分钟才应答；一次 ARP 不完整、ping 丢包或端口超时，不能当成平板离线或端口变了。用同一个地址重试 10 次，每次间隔 30 秒，不要重新配对，也不要换 IP 或扫端口。先确认本机仍在 `192.168.2.0/24`：
 
 ```bash
 ifconfig en1 | grep 'inet '
-ping -c 3 -W 1000 192.168.2.24
-arp -n 192.168.2.24
 ```
 
-本机地址应在 `192.168.2.0/24`（曾是 `192.168.2.19`）。ARP 显示 `(incomplete)` 或 ping 出现 `No route to host`，是链路层还没拿到 MAC `5e:2d:53:f2:e8:7a`，不是端口变了。隔几秒再 ping 两到三次。能通之后用 `nc` 确认 `33295` 仍开着：
+本机不在这个网段就停下来告诉用户。在网段内就循环：
 
 ```bash
-nc -z -G 2 192.168.2.24 33295
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  ping -c 1 -W 1000 192.168.2.24
+  if nc -z -G 2 192.168.2.24 45587; then
+    adb connect 192.168.2.24:45587
+    adb devices -l | grep -q '192.168.2.24:45587[[:space:]]*device' && break
+  fi
+  sleep 30
+done
+adb devices -l
 ```
 
-`nc` 成功但 `adb connect` 仍是 `No route to host`，就是 ADB 服务缓存了刚才的失败。重启服务再连，不要 `adb pair`，也不要扫端口：
+循环中途拿到 `device` 就立刻继续，不要把 10 次跑完。状态是 `device` 时，不要因为前面某次 ping 失败停下。
+
+4. 端口已经能连上，但 `adb connect` 仍是 `No route to host` 或协议错误，就是 ADB 服务缓存了失败。重启服务后再连一次，仍然不要重新配对：
 
 ```bash
 adb kill-server
 adb start-server
-adb connect 192.168.2.24:33295
+adb connect 192.168.2.24:45587
 adb devices -l
 ```
 
-本机不在 `192.168.2.0/24`，或 ARP 一直不完整且 ping 始终 100% 丢包，再停下来告诉用户。不要猜新的 IP。
-
-4. 只有 ping 已经稳定成功、`33295` 也确认开着，重启 ADB 后 `adb connect` 仍然失败，才用同一组参数重配一次：
-
-```bash
-adb pair 192.168.2.24:38217 748050
-adb connect 192.168.2.24:33295
-adb devices -l
-```
-
-`adb pair` 成功但 `connect` 仍失败，才说明连接端口变了。停下来告诉用户，不要自己扫端口。`adb pair` 拒绝这个配对码，也停下来告诉用户。不要猜新的端口或配对码。
+10 次后仍然不是 `device`，或重启 ADB 后仍失败，再停下来告诉用户。不要 `adb pair`，不要扫描端口，也不要猜新的 IP 或端口。`unauthorized` 也停下来告诉用户，不要重配。
 
 5. 拿到 `device` 之后确认是这台平板，并且已安装米游社 `com.mihoyo.hyperion`。型号不是 `SM-P610` 就停下来告诉用户，不要在别的设备上继续。
 
