@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,6 +22,17 @@ async function waitFor(check: () => boolean | Promise<boolean>): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error("等待状态文件超时");
+}
+
+async function readStoredStatus(directory: string): Promise<string | undefined> {
+  const names = (await readdir(directory)).filter((name) => name.endsWith(".json"));
+  const name = names[0];
+  if (!name) return undefined;
+  try {
+    return JSON.parse(await readFile(join(directory, name), "utf8")).status;
+  } catch {
+    return undefined;
+  }
 }
 
 afterEach(async () => {
@@ -71,6 +82,39 @@ describe("AgentSessionPresenceStore", () => {
 
     await first.stop();
     await second.stop();
+  });
+
+  it("心跳重新计算状态，undefined 或抛错时保持原状态", async () => {
+    const directory = await createDirectory();
+    let resolved: "idle" | "working" | undefined = "idle";
+    let shouldThrow = false;
+    const store = new AgentSessionPresenceStore({
+      directory,
+      heartbeatMs: 10,
+      pollMs: 60_000,
+      isProcessAlive: () => true,
+      resolveStatus: () => {
+        if (shouldThrow) throw new Error("ctx stale");
+        return resolved;
+      },
+    });
+    store.start("heartbeat", "/workspace/heartbeat", "working");
+
+    await waitFor(() => store.getRecords()[0]?.status === "idle");
+    await waitFor(async () => (await readStoredStatus(directory)) === "idle");
+
+    resolved = undefined;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(store.getRecords()[0]?.status).toBe("idle");
+
+    resolved = "working";
+    shouldThrow = true;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(store.getRecords()[0]?.status).toBe("idle");
+
+    shouldThrow = false;
+    await waitFor(() => store.getRecords()[0]?.status === "working");
+    await store.stop();
   });
 
   it("忽略过期、已退出或损坏的状态文件", async () => {

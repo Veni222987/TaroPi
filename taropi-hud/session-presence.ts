@@ -23,6 +23,7 @@ export interface AgentSessionPresenceOptions {
   now?: () => number;
   isProcessAlive?: (pid: number) => boolean;
   onChange?: () => void;
+  resolveStatus?: () => AgentSessionStatus | undefined;
 }
 
 const DEFAULT_HEARTBEAT_MS = 5_000;
@@ -61,6 +62,7 @@ export class AgentSessionPresenceStore {
   private readonly now: () => number;
   private readonly isProcessAlive: (pid: number) => boolean;
   private readonly onChange?: () => void;
+  private readonly resolveStatus?: () => AgentSessionStatus | undefined;
   private readonly instanceId = randomUUID();
   private current: AgentSessionPresence | undefined;
   private remoteRecords: AgentSessionPresence[] = [];
@@ -78,6 +80,7 @@ export class AgentSessionPresenceStore {
     this.now = options.now ?? Date.now;
     this.isProcessAlive = options.isProcessAlive ?? isProcessAlive;
     this.onChange = options.onChange;
+    this.resolveStatus = options.resolveStatus;
   }
 
   // start 注册当前交互会话并启动心跳与其他会话状态监听。
@@ -160,8 +163,18 @@ export class AgentSessionPresenceStore {
 
   private heartbeat(): void {
     if (!this.current || !this.active) return;
-    this.current = { ...this.current, updatedAt: this.now() };
+    const status = this.readResolvedStatus() ?? this.current.status;
+    this.current = { ...this.current, status, updatedAt: this.now() };
     this.queueWrite();
+    this.notifyIfChanged();
+  }
+
+  private readResolvedStatus(): AgentSessionStatus | undefined {
+    try {
+      return this.resolveStatus?.();
+    } catch {
+      return undefined;
+    }
   }
 
   private queueWrite(): void {

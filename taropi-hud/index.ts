@@ -15,7 +15,7 @@ import {
 } from "./theme.ts";
 import { HUD_EVENTS, HUD_PROTOCOL_VERSION, type HudPanelProvider, type HudRefreshRequest } from "./protocol.ts";
 import { HudPanelRegistry } from "./registry.ts";
-import { AgentSessionPresenceStore, groupAgentDirectories } from "./session-presence.ts";
+import { AgentSessionPresenceStore, groupAgentDirectories, type AgentSessionStatus } from "./session-presence.ts";
 
 const execFileAsync = promisify(execFile);
 const panels = new HudPanelRegistry();
@@ -56,6 +56,10 @@ let cumCacheWriteTokens = 0;
 let latestCtx: ExtensionContext | undefined;
 let hudRenderSuspended = false;
 let pendingHudResume: ReturnType<typeof setTimeout> | undefined;
+let pendingPresenceResync: ReturnType<typeof setTimeout> | undefined;
+
+const PRESENCE_RESYNC_INTERVAL_MS = 50;
+const PRESENCE_RESYNC_MAX_ATTEMPTS = 20;
 
 const I_MODEL = "λ";
 const I_PATH = "⌘";
@@ -299,11 +303,42 @@ function clearHud(ctx?: ExtensionContext): void {
   if (target) target.ui.setWidget("taropi-hud", undefined, { placement: "belowEditor" });
 }
 
-function syncPresence(ctx?: ExtensionContext): void {
+// resolvePresenceStatus 计算当前会话状态；ctx 不可用或已过期时返回 undefined。
+function resolvePresenceStatus(ctx?: ExtensionContext): AgentSessionStatus | undefined {
   const target = ctx ?? latestCtx;
-  if (!target || target.mode !== "tui") return;
-  const status = waitingForUser || (!agentRunActive && target.isIdle()) ? "idle" : "working";
-  presence?.setStatus(status);
+  if (!target || target.mode !== "tui") return undefined;
+  try {
+    return waitingForUser || (!agentRunActive && target.isIdle()) ? "idle" : "working";
+  } catch {
+    return undefined;
+  }
+}
+
+function syncPresence(ctx?: ExtensionContext): AgentSessionStatus | undefined {
+  const status = resolvePresenceStatus(ctx);
+  if (status) presence?.setStatus(status);
+  return status;
+}
+
+function clearPresenceResync(): void {
+  if (pendingPresenceResync) clearTimeout(pendingPresenceResync);
+  pendingPresenceResync = undefined;
+}
+
+// 压缩事件先于 Pi 清除压缩标记，需要短暂重查直到状态真正变为 idle。
+function schedulePresenceResync(ctx: ExtensionContext): void {
+  clearPresenceResync();
+  let attempts = 0;
+  const tick = (): void => {
+    pendingPresenceResync = undefined;
+    attempts += 1;
+    const status = syncPresence(ctx);
+    if (status === undefined || status === "idle" || attempts >= PRESENCE_RESYNC_MAX_ATTEMPTS) return;
+    pendingPresenceResync = setTimeout(tick, PRESENCE_RESYNC_INTERVAL_MS);
+    pendingPresenceResync.unref?.();
+  };
+  pendingPresenceResync = setTimeout(tick, PRESENCE_RESYNC_INTERVAL_MS);
+  pendingPresenceResync.unref?.();
 }
 
 function suspendHudRendering(ctx?: ExtensionContext): void {
@@ -427,6 +462,7 @@ export function registerHud(pi: ExtensionAPI): void {
     const activePresence = presence;
     presence = undefined;
     void activePresence?.stop();
+    clearPresenceResync();
     if (pendingHudResume) clearTimeout(pendingHudResume);
     pendingHudResume = undefined;
     hudRenderSuspended = false;
@@ -439,6 +475,7 @@ export function registerHud(pi: ExtensionAPI): void {
     hudRenderSuspended = false;
     if (pendingHudResume) clearTimeout(pendingHudResume);
     pendingHudResume = undefined;
+    clearPresenceResync();
     sessionStartTime = Date.now();
     cwd = ctx.cwd;
     agentRunActive = false;
@@ -450,7 +487,10 @@ export function registerHud(pi: ExtensionAPI): void {
     modelId = ctx.model?.id ?? "";
     if (ctx.mode === "tui") {
       const previousPresence = presence;
-      presence = new AgentSessionPresenceStore({ onChange: () => void refreshHud() });
+      presence = new AgentSessionPresenceStore({
+        onChange: () => void refreshHud(),
+        resolveStatus: () => resolvePresenceStatus(),
+      });
       void previousPresence?.stop();
       presence.start(ctx.sessionManager.getSessionId(), ctx.cwd, "idle");
       ctx.ui.setFooter(() => ({ invalidate() {}, render: () => [] }));
@@ -490,12 +530,14 @@ export function registerHud(pi: ExtensionAPI): void {
     latestCtx = ctx;
     agentRunActive = false;
     syncPresence(ctx);
+    schedulePresenceResync(ctx);
     void refreshHud(ctx);
   });
   pi.on("session_compact_failed", (_event, ctx) => {
     latestCtx = ctx;
     agentRunActive = false;
     syncPresence(ctx);
+    schedulePresenceResync(ctx);
     void refreshHud(ctx);
   });
   pi.on("ui_prompt_start", (_event, ctx) => {

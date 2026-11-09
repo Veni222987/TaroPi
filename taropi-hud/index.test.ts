@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -49,7 +50,16 @@ describe("HUD 基础行", () => {
     vi.useRealTimers();
   });
 
+  let idle = true;
+
+  async function storedStatuses(): Promise<string[]> {
+    const directory = join(runtimeDir, "taropi-hud");
+    const names = (await readdir(directory).catch(() => [] as string[])).filter((name) => name.endsWith(".json"));
+    return Promise.all(names.map(async (name) => JSON.parse(await readFile(join(directory, name), "utf8")).status as string));
+  }
+
   function startHud(getContextUsage: () => unknown): void {
+    idle = true;
     vi.useFakeTimers({ toFake: ["Date"] });
     runtimeDir = mkdtempSync(join(tmpdir(), "taropi-hud-"));
     process.env.XDG_RUNTIME_DIR = runtimeDir;
@@ -59,7 +69,7 @@ describe("HUD 基础行", () => {
       mode: "tui",
       cwd: "/tmp/demo",
       model: { provider: "tencent-intranet", id: "gpt-6.1-sol" },
-      isIdle: () => true,
+      isIdle: () => idle,
       hasPendingMessages: () => false,
       getContextUsage,
       sessionManager: { getSessionId: () => "session-1" },
@@ -91,6 +101,35 @@ describe("HUD 基础行", () => {
     });
     expect(hooks.has("turn_start")).toBe(false);
     expect(visible(widgets.at(-1)?.join("\n") ?? "")).not.toContain("loop");
+  });
+
+  it.each(["session_compact", "session_compact_failed"])("%s 后 Pi 才清除压缩标记时，状态文件恢复 idle", async (eventName) => {
+    startHud(() => ({ tokens: 1, percent: 1, contextWindow: 1000 }));
+    hooks.get("session_start")?.({}, ctx);
+    await vi.waitFor(async () => expect(await storedStatuses()).toEqual(["idle"]));
+
+    idle = false;
+    hooks.get("session_before_compact")?.({}, ctx);
+    await vi.waitFor(async () => expect(await storedStatuses()).toEqual(["working"]));
+    hooks.get(eventName)?.({}, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(await storedStatuses()).toEqual(["working"]);
+
+    idle = true;
+    await vi.waitFor(async () => expect(await storedStatuses()).toEqual(["idle"]));
+  });
+
+  it("session_shutdown 后延迟重查不再写状态文件", async () => {
+    startHud(() => ({ tokens: 1, percent: 1, contextWindow: 1000 }));
+    hooks.get("session_start")?.({}, ctx);
+    await vi.waitFor(async () => expect(await storedStatuses()).toEqual(["idle"]));
+
+    idle = false;
+    hooks.get("session_compact")?.({}, ctx);
+    await hooks.get("session_shutdown")?.({}, ctx);
+    idle = true;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await storedStatuses()).toEqual([]);
   });
 
   it("上下文不可用时不显示用量和时长", async () => {
