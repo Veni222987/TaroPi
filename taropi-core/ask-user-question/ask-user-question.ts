@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { SettingsManager, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, isKeyRepeat, matchesKey, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import {
 	COLLAPSE_KEY_OFF,
@@ -14,7 +14,13 @@ import {
 	type AskUserPromptEventPayload,
 } from "./events.ts";
 import { type DialogUI, hasDialogUI, runRpcQuestionnaire } from "./rpc-fallback.ts";
+import { editWithExternalEditor } from "./state/external-editor.ts";
 import { displayLabel, t } from "./state/i18n-bridge.ts";
+import {
+	QuestionnaireSession,
+	type QuestionnaireSessionComponent,
+	type QuestionnaireSessionConfig,
+} from "./state/questionnaire-session.ts";
 import { sentinelsToAppend } from "./state/row-intent.ts";
 import { normalizeQuestionParams, type RawQuestionParams } from "./tool/normalize-params.ts";
 import { buildQuestionnaireResponse, buildToolResult } from "./tool/response-envelope.ts";
@@ -23,7 +29,6 @@ import {
 	MAX_QUESTIONS,
 	MIN_OPTIONS,
 	type QuestionData,
-	type QuestionnaireError,
 	type QuestionnaireResult,
 	type QuestionParams,
 	QuestionParamsSchema,
@@ -73,12 +78,6 @@ const ERROR_NO_UI = "错误：当前处于非交互模式，无法展示提问�
 const ERROR_NO_CUSTOM_UI =
 	"错误：当前客户端无法渲染交互式提问界面（自定义 UI 不可用）。用户并未看到这些问题——请不要将其视为用户拒绝，直接以纯文本在对话中向用户提问。";
 
-const ERROR_SESSION_LOAD_FAILED =
-	"错误：提问界面加载失败（可能是运行期间磁盘依赖被变更）。用户并未看到这些问题——请不要将其视为用户拒绝，直接以纯文本在对话中提问，并提醒用户必要时修复依赖并重启 Pi。";
-
-const ERROR_STALE_MODULE_CACHE =
-	"错误：提问界面因先前的模块缓存失效无法加载。用户并未看到这些问题——请不要将其视为用户拒绝，直接以纯文本在对话中提问，并提醒用户重启 Pi 以恢复该工具。";
-
 export const BEL = "\x07";
 
 function emitTerminalAttention(): void {
@@ -89,34 +88,8 @@ function emitTerminalAttention(): void {
 	}
 }
 
-export const PREWARM_DELAY_MS = 2000;
-
-type SessionModule = typeof import("./state/questionnaire-session.ts");
-type SessionRef = { current: import("./state/questionnaire-session.ts").QuestionnaireSession | null };
+type SessionRef = { current: QuestionnaireSession | null };
 type OverlayHandleRef = { current: OverlayHandle | undefined };
-
-type SessionLoad =
-	| { ok: true; module: SessionModule }
-	| { ok: false; error: Extract<QuestionnaireError, "session_load_failed" | "stale_module_cache">; message: string };
-
-export async function loadQuestionnaireSession(): Promise<SessionLoad> {
-	let mod: SessionModule;
-	try {
-		mod = await import("./state/questionnaire-session.ts");
-	} catch (e) {
-		const cause = e instanceof Error ? e.message : String(e);
-		return { ok: false, error: "session_load_failed", message: `${ERROR_SESSION_LOAD_FAILED}（原因：${cause}）` };
-	}
-	if (typeof mod.QuestionnaireSession !== "function") {
-		const keys = JSON.stringify(Object.keys(mod));
-		return {
-			ok: false,
-			error: "stale_module_cache",
-			message: `${ERROR_STALE_MODULE_CACHE}（模块导出键：${keys}）`,
-		};
-	}
-	return { ok: true, module: mod };
-}
 
 function registerCollapseKeyListener(
 	ctx: ExtensionContext,
@@ -148,16 +121,15 @@ function makeSessionFactory(config: {
 	collapseKey: string;
 	canReopenWhileHidden: boolean;
 	sessionRef: SessionRef;
-	Session: SessionModule["QuestionnaireSession"];
 }) {
-	const { ctx, typed, itemsByTab, collapseKey, canReopenWhileHidden, sessionRef, Session } = config;
+	const { ctx, typed, itemsByTab, collapseKey, canReopenWhileHidden, sessionRef } = config;
 	return (
 		tui: TUI,
 		theme: Theme,
-		keybindings: import("./state/questionnaire-session.ts").QuestionnaireSessionConfig["keybindings"],
+		keybindings: QuestionnaireSessionConfig["keybindings"],
 		done: (result: QuestionnaireResult) => void,
-	): import("./state/questionnaire-session.ts").QuestionnaireSessionComponent => {
-		const session = new Session({
+	): QuestionnaireSessionComponent => {
+		const session = new QuestionnaireSession({
 			tui,
 			theme,
 			params: typed,
@@ -166,10 +138,6 @@ function makeSessionFactory(config: {
 			keybindings,
 			editInput: async (value) => {
 				try {
-					const [{ SettingsManager }, { editWithExternalEditor }] = await Promise.all([
-						import("@earendil-works/pi-coding-agent"),
-						import("./state/external-editor.ts"),
-					]);
 					const editorCommand = SettingsManager.create(ctx.cwd, undefined, {
 						projectTrusted: ctx.isProjectTrusted(),
 					}).getExternalEditorCommand();
@@ -194,11 +162,6 @@ async function resolveUndefinedResult(ctx: ExtensionContext, typed: QuestionPara
 		return buildQuestionnaireResponse(await runRpcQuestionnaire(ctx.ui, typed), typed);
 	}
 	return buildToolResult(ERROR_NO_CUSTOM_UI, { answers: [], cancelled: true, error: "no_custom_ui" });
-}
-
-function prewarmSessionGraph(): void {
-	const timer = setTimeout(() => void loadQuestionnaireSession().catch(() => undefined), PREWARM_DELAY_MS);
-	timer.unref?.();
 }
 
 export function buildItemsForQuestion(question: QuestionData): WrappingSelectItem[] {
@@ -267,12 +230,6 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 			}
 
 			const itemsByTab: WrappingSelectItem[][] = typed.questions.map((q) => buildItemsForQuestion(q));
-
-			const sessionLoad = await loadQuestionnaireSession();
-			if (!sessionLoad.ok) {
-				return buildToolResult(sessionLoad.message, { answers: [], cancelled: true, error: sessionLoad.error });
-			}
-			const { QuestionnaireSession } = sessionLoad.module;
 			const collapseKey = resolveCollapseKey(loadConfig());
 
 			const sessionRef: SessionRef = { current: null };
@@ -291,7 +248,6 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 						collapseKey,
 						canReopenWhileHidden,
 						sessionRef,
-						Session: QuestionnaireSession,
 					}),
 					{
 						overlay: true,
@@ -319,8 +275,6 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 			}
 		},
 	});
-
-	prewarmSessionGraph();
 }
 
 export { buildQuestionnaireResponse, buildToolResult };

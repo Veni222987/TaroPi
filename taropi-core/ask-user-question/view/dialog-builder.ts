@@ -37,17 +37,6 @@ const OVERFLOW_UP = "↑";
 const OVERFLOW_DOWN = "↓";
 const OVERFLOW_BOTH = "↕";
 
-function renderFitsTerminal(
-	topLines: string[],
-	middleLines: string[],
-	bottomLines: string[],
-	spacerRows: number,
-): string[] {
-	return spacerRows > 0
-		? [...topLines, ...middleLines, ...Array<string>(spacerRows).fill(""), ...bottomLines]
-		: [...topLines, ...middleLines, ...bottomLines];
-}
-
 function renderChromeOnly(topLines: string[], bottomLines: string[], termRows: number): string[] {
 	const chromeOnly = [...topLines, ...bottomLines];
 	return chromeOnly.length > termRows ? chromeOnly.slice(0, termRows) : chromeOnly;
@@ -105,7 +94,6 @@ export class DialogView implements StatefulView<DialogProps> {
 	private readonly config: DialogConfig;
 	private readonly questionStrategy: TabContentStrategy;
 	private readonly submitStrategy: TabContentStrategy | undefined;
-	private readonly maxFooterRowCount: number;
 
 	constructor(config: DialogConfig, initialProps: DialogProps) {
 		this.config = config;
@@ -128,7 +116,6 @@ export class DialogView implements StatefulView<DialogProps> {
 					notesInput: config.notesInput,
 				})
 			: undefined;
-		this.maxFooterRowCount = Math.max(this.questionStrategy.footerRowCount, this.submitStrategy?.footerRowCount ?? 0);
 	}
 
 	setProps(props: DialogProps): void {
@@ -156,18 +143,11 @@ export class DialogView implements StatefulView<DialogProps> {
 		const middleRows = middleLines.length;
 		const naturalLength = topFixed + middleRows + bottomFixed;
 
-		const spacerRows = Math.max(
-			0,
-			this.config.getBodyHeight(width) +
-				this.maxFooterRowCount -
-				strategy.bodyHeight(width, state) -
-				strategy.footerRowCount,
-		);
-
 		const termRows = this.config.getTerminalRows();
 
-		if (naturalLength + spacerRows <= termRows) {
-			return renderFitsTerminal(topLines, middleLines, bottomLines, spacerRows);
+		// 弹窗高度直接随当前内容自然收缩，不按最大预览高度额外补齐空行。
+		if (naturalLength <= termRows) {
+			return [...topLines, ...middleLines, ...bottomLines];
 		}
 
 		const availableMiddle = Math.max(0, termRows - topFixed - bottomFixed);
