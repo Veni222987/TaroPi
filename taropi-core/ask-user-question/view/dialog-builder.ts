@@ -37,12 +37,19 @@ const OVERFLOW_UP = "↑";
 const OVERFLOW_DOWN = "↓";
 const OVERFLOW_BOTH = "↕";
 
-function renderFitsTerminal(natural: string[], spacerRows: number): string[] {
-	return spacerRows > 0 ? [...natural, ...Array<string>(spacerRows).fill("")] : natural;
+function renderFitsTerminal(
+	topLines: string[],
+	middleLines: string[],
+	bottomLines: string[],
+	spacerRows: number,
+): string[] {
+	return spacerRows > 0
+		? [...topLines, ...middleLines, ...Array<string>(spacerRows).fill(""), ...bottomLines]
+		: [...topLines, ...middleLines, ...bottomLines];
 }
 
-function renderChromeOnly(natural: string[], topFixed: number, bottomFixed: number, termRows: number): string[] {
-	const chromeOnly = [...natural.slice(0, topFixed), ...natural.slice(natural.length - bottomFixed)];
+function renderChromeOnly(topLines: string[], bottomLines: string[], termRows: number): string[] {
+	const chromeOnly = [...topLines, ...bottomLines];
 	return chromeOnly.length > termRows ? chromeOnly.slice(0, termRows) : chromeOnly;
 }
 
@@ -138,12 +145,16 @@ export class DialogView implements StatefulView<DialogProps> {
 		const strategy = onSubmit && this.submitStrategy ? this.submitStrategy : this.questionStrategy;
 
 		const headingRowCache = strategy.headingRows(state);
-		const headingCount = headingRowCache.length;
-		const natural = this.buildContainerFromStrategy(strategy, headingRowCache).render(width);
+		const { topLines, headingLines, middleLines, bottomLines } = this.renderSections(
+			strategy,
+			headingRowCache,
+			width,
+		);
 
-		const topFixed = 1 + (this.config.isMulti && this.config.tabBar ? 2 : 0) + 1;
-		const bottomFixed = 1 + strategy.footerRowCount;
-		const middleRows = natural.length - topFixed - bottomFixed;
+		const topFixed = topLines.length;
+		const bottomFixed = bottomLines.length;
+		const middleRows = middleLines.length;
+		const naturalLength = topFixed + middleRows + bottomFixed;
 
 		const spacerRows = Math.max(
 			0,
@@ -155,22 +166,22 @@ export class DialogView implements StatefulView<DialogProps> {
 
 		const termRows = this.config.getTerminalRows();
 
-		if (natural.length + spacerRows <= termRows) {
-			return renderFitsTerminal(natural, spacerRows);
+		if (naturalLength + spacerRows <= termRows) {
+			return renderFitsTerminal(topLines, middleLines, bottomLines, spacerRows);
 		}
 
 		const availableMiddle = Math.max(0, termRows - topFixed - bottomFixed);
 		if (availableMiddle === 0) {
-			return renderChromeOnly(natural, topFixed, bottomFixed, termRows);
+			return renderChromeOnly(topLines, bottomLines, termRows);
 		}
 
 		const scrollStart = computeScrollStart(
 			strategy.focusedItemRowRange(width, state),
-			headingCount,
+			headingLines,
 			availableMiddle,
 			middleRows,
 		);
-		const scrollableMiddle = natural.slice(topFixed + scrollStart, topFixed + scrollStart + availableMiddle);
+		const scrollableMiddle = middleLines.slice(scrollStart, scrollStart + availableMiddle);
 		decorateOverflow(
 			scrollableMiddle,
 			scrollStart > 0,
@@ -178,32 +189,42 @@ export class DialogView implements StatefulView<DialogProps> {
 			this.config.theme,
 		);
 
-		const result = [
-			...natural.slice(0, topFixed),
-			...scrollableMiddle,
-			...natural.slice(natural.length - bottomFixed),
-		];
+		const result = [...topLines, ...scrollableMiddle, ...bottomLines];
 		return result.length > termRows ? result.slice(0, termRows) : result;
 	}
 
-	private buildContainerFromStrategy(strategy: TabContentStrategy, headingRowCache: Component[]): Container {
+	private renderSections(
+		strategy: TabContentStrategy,
+		headingRowCache: Component[],
+		width: number,
+	): { topLines: string[]; headingLines: number; middleLines: string[]; bottomLines: string[] } {
 		const { theme, isMulti, tabBar } = this.config;
 		const state = this.liveProps.state;
-		const container = new Container();
 		const border = () => new DynamicBorder((s) => theme.fg("accent", s));
 
-		container.addChild(border());
-		if (isMulti && tabBar) container.addChild(tabBar);
-		container.addChild(new Spacer(1));
+		const topContainer = new Container();
+		topContainer.addChild(border());
+		if (isMulti && tabBar) topContainer.addChild(tabBar);
+		topContainer.addChild(new Spacer(1));
 
-		for (const c of headingRowCache) container.addChild(c);
-		container.addChild(strategy.bodyComponent(state));
-		container.addChild(new Spacer(1));
-		for (const c of strategy.midRows(state)) container.addChild(c);
+		const headingContainer = new Container();
+		for (const c of headingRowCache) headingContainer.addChild(c);
+		const renderedHeadings = headingContainer.render(width);
 
-		container.addChild(border());
-		for (const c of strategy.footerRows(state)) container.addChild(c);
+		const bodyContainer = new Container();
+		bodyContainer.addChild(strategy.bodyComponent(state));
+		bodyContainer.addChild(new Spacer(1));
+		for (const c of strategy.midRows(state)) bodyContainer.addChild(c);
 
-		return container;
+		const bottomContainer = new Container();
+		bottomContainer.addChild(border());
+		for (const c of strategy.footerRows(state)) bottomContainer.addChild(c);
+
+		return {
+			topLines: topContainer.render(width),
+			headingLines: renderedHeadings.length,
+			middleLines: [...renderedHeadings, ...bodyContainer.render(width)],
+			bottomLines: bottomContainer.render(width),
+		};
 	}
 }

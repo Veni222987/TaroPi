@@ -301,6 +301,46 @@ describe("TUI 会话与 Preview 预览渲染", () => {
 			cancelled: false,
 		});
 	});
+
+	it("切换不同高度的预览选项时，补齐高度放在底部分隔线上方，底部提示栏下方无空白行", () => {
+		initTheme();
+		const tallPreview = Array.from({ length: 14 }, (_, i) => `- 行 ${i + 1}`).join("\n");
+		const params = normalizeQuestionParams({
+			questions: [
+				{
+					question: "选择预览测试？",
+					header: "预览",
+					options: ["高预览 — 14 行内容", "短预览 — 2 行内容"],
+					previews: [tallPreview, "- 短内容"],
+				},
+				{
+					question: "第二题？",
+					header: "确认",
+					options: ["是 — 继续", "否 — 停止"],
+				},
+			],
+		});
+		const session = new QuestionnaireSession({
+			tui: createFakeTui(120, 40),
+			theme: createFakeTheme(),
+			params,
+			itemsByTab: params.questions.map(buildItemsForQuestion),
+			done: vi.fn(),
+			keybindings: createFakeKeybindings(),
+			editInput: async () => undefined,
+			collapseKey: "ctrl+]",
+			canReopenWhileHidden: false,
+		});
+
+		const linesOpt1 = session.component.render(120);
+		expect(linesOpt1[linesOpt1.length - 1]).toContain("回车选择");
+
+		// 切到较短的第二个选项：总高度保持稳定，且最后一行仍然是底部提示栏，无下方空行
+		session.component.handleInput("\x1b[B");
+		const linesOpt2 = session.component.render(120);
+		expect(linesOpt2.length).toBe(linesOpt1.length);
+		expect(linesOpt2[linesOpt2.length - 1]).toContain("回车选择");
+	});
 });
 
 describe("RPC 降级与工具注册", () => {
