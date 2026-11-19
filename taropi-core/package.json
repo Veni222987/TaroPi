@@ -1,6 +1,6 @@
 {
   "name": "taropi-core",
-  "version": "0.1.37",
+  "version": "0.1.38",
   "description": "TaroPi 基础扩展: 子Agent、主动提问、web_access等。",
   "keywords": [
     "pi-package"
@@ -21,8 +21,6 @@
     "typebox": "*"
   },
   "dependencies": {
-    "@juicesharp/rpiv-ask-user-question": "2.10.1",
-    "@juicesharp/rpiv-i18n": "2.10.1",
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.16.11",
     "pi-compact-tools": "^0.8.1",

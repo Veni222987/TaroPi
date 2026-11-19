@@ -26,8 +26,6 @@
     ]
   },
   "dependencies": {
-    "@juicesharp/rpiv-ask-user-question": "2.10.1",
-    "@juicesharp/rpiv-i18n": "2.10.1",
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.16.11",
     "pi-compact-tools": "^0.8.1",
