@@ -19,6 +19,22 @@ description: 在已连接 ADB 的安卓设备上完成米游社原神每日签�
 adb devices -l
 ```
 
+在 macOS 上跑后台任务（cron/launchd）时要注意一件事：由这些上下文启动的 adb 服务可能完全无法访问局域网，`adb connect <局域网IP>:5555` 会直接报 `No route to host`。已实测确认这不是网络或设备问题（同一上下文里 `nc`、`curl`、`python3` 都能连到同一地址），而是 adb 服务进程的身份拿不到本地网络权限；macOS 也没有给命令行程序加本地网络权限的入口（系统设置 → 隐私与安全 → 本地网络 里不会有 adb，也无法添加）。遇到这种情况不要反复查网络、查平板或尝试授权，改用下面的自检判断状态：
+
+```bash
+genshin-adb-health
+# health: adb-out=blocked relay=up device=device
+#   adb-out=blocked  adb 服务被挡出局域网（后台环境正常现象，走回环中继即可）
+#   relay=up         回环中继 127.0.0.1:5556 在监听
+#   device=device    已连上目标设备
+```
+
+对应的做法是用本机的中继 `127.0.0.1:5556`（LaunchAgent `local.genshin.adb-relay`，把 5556 转发到平板 5555），此时 `$S` 就是 `127.0.0.1:5556`。中继没在跑时：
+
+```bash
+launchctl kickstart -k gui/501/local.genshin.adb-relay
+```
+
 2. 设备上已安装米游社，包名 `com.mihoyo.hyperion`，并且已登录、绑定了原神角色。
 
 ```bash
