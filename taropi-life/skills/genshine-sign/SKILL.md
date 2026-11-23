@@ -19,18 +19,6 @@ description: 在已连接 ADB 的安卓设备上完成米游社原神每日签�
 adb devices -l
 ```
 
-在这台 macOS 上如果 `adb connect <局域网IP>:5555` 报 `No route to host`，而同一时刻 `nc`/`curl` 能连到同一地址，那不是设备或网络问题，而是 Clash Verge 的 TUN 模式把 adb 的流量吸进了虚拟网卡（mihomo 不转发局域网流量，于是回 `EHOSTUNREACH`）。处理办法是在 Clash Verge 当前订阅的「配置增强」里给 TUN 加 `route-exclude-address`（`192.168.0.0/16`、`10.0.0.0/8`、`172.16.0.0/12`），让私网段直连。不要绕回环中继，也不要反复重连。
-
-用下面的自检确认状态：
-
-```bash
-genshin-adb-health
-# health: adb-out=ok relay=down device=192.168.2.24:5555=device
-#   adb-out=ok       adb 服务能直达局域网
-#   adb-out=blocked  TUN 把 adb 流量吸走了，检查 route-exclude-address 是否还在
-#   device=...=device 已连上的设备
-```
-
 2. 设备上已安装米游社，包名 `com.mihoyo.hyperion`，并且已登录、绑定了原神角色。
 
 ```bash
