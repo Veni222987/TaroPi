@@ -19,20 +19,16 @@ description: 在已连接 ADB 的安卓设备上完成米游社原神每日签�
 adb devices -l
 ```
 
-在 macOS 上跑后台任务（cron/launchd）时要注意一件事：由这些上下文启动的 adb 服务可能完全无法访问局域网，`adb connect <局域网IP>:5555` 会直接报 `No route to host`。已实测确认这不是网络或设备问题（同一上下文里 `nc`、`curl`、`python3` 都能连到同一地址），而是 adb 服务进程的身份拿不到本地网络权限；macOS 也没有给命令行程序加本地网络权限的入口（系统设置 → 隐私与安全 → 本地网络 里不会有 adb，也无法添加）。遇到这种情况不要反复查网络、查平板或尝试授权，改用下面的自检判断状态：
+在这台 macOS 上如果 `adb connect <局域网IP>:5555` 报 `No route to host`，而同一时刻 `nc`/`curl` 能连到同一地址，那不是设备或网络问题，而是 Clash Verge 的 TUN 模式把 adb 的流量吸进了虚拟网卡（mihomo 不转发局域网流量，于是回 `EHOSTUNREACH`）。处理办法是在 Clash Verge 当前订阅的「配置增强」里给 TUN 加 `route-exclude-address`（`192.168.0.0/16`、`10.0.0.0/8`、`172.16.0.0/12`），让私网段直连。不要绕回环中继，也不要反复重连。
+
+用下面的自检确认状态：
 
 ```bash
 genshin-adb-health
-# health: adb-out=blocked relay=up device=device
-#   adb-out=blocked  adb 服务被挡出局域网（后台环境正常现象，走回环中继即可）
-#   relay=up         回环中继 127.0.0.1:5556 在监听
-#   device=device    已连上目标设备
-```
-
-对应的做法是用本机的中继 `127.0.0.1:5556`（LaunchAgent `local.genshin.adb-relay`，把 5556 转发到平板 5555），此时 `$S` 就是 `127.0.0.1:5556`。中继没在跑时：
-
-```bash
-launchctl kickstart -k gui/501/local.genshin.adb-relay
+# health: adb-out=ok relay=down device=192.168.2.24:5555=device
+#   adb-out=ok       adb 服务能直达局域网
+#   adb-out=blocked  TUN 把 adb 流量吸走了，检查 route-exclude-address 是否还在
+#   device=...=device 已连上的设备
 ```
 
 2. 设备上已安装米游社，包名 `com.mihoyo.hyperion`，并且已登录、绑定了原神角色。
