@@ -6,6 +6,7 @@ import registerArchive from "./archive/index.ts";
 import registerPermissions from "./permissions/index.js";
 import registerWebAccess from "./web-access/index.ts";
 import registerAskUserQuestion from "./ask-user-question/index.ts";
+import { registerAsk } from "./ask/index.ts";
 import registerCompactTools from "pi-compact-tools/extensions/compact-tools.ts";
 import { registerHudFeature } from "./hud-adapt.ts";
 import { register as registerModelAlias } from "./model-alias/index.js";
@@ -19,6 +20,7 @@ export default function registerTaroPi(pi: ExtensionAPI): void {
 
   // registerSubAgents(pi);
   registerAskUserQuestion(pi);
+  registerAsk(pi);
   registerPlan(pi);
   registerArchive(pi);
   registerPermissions(pi);

@@ -7,6 +7,8 @@ import { generatePlanTitle } from "./title.ts";
 import { showPlanDecision } from "./tui.ts";
 import type { PlanConfig, PlanRequest, PlanResult, PlanStatus, WorkflowState } from "./types.ts";
 
+const PLAN_PHASE_MESSAGE = "taropi-plan-phase";
+
 // PlanWorkflow 管理会话检查点及一次性阶段启动，不接管每轮模型上下文。
 export class PlanWorkflow {
 	state: WorkflowState = idleState();
@@ -79,7 +81,7 @@ export class PlanWorkflow {
 			this.render();
 			await switchPlanModel(this.pi, ctx, this.config.planning.model);
 			if (generation !== this.generation) return;
-			this.pi.sendUserMessage(phaseMessage(this.state, this.config), { deliverAs: "followUp" });
+			this.sendPhase(phaseMessage(this.state, this.config), { triggerTurn: true });
 		} catch (error) {
 			if (generation === this.generation && !controller.signal.aborted) ctx.ui.notify(`计划创建未完成：${String(error)}`, "warning");
 		} finally {
@@ -163,9 +165,10 @@ export class PlanWorkflow {
 		await switchPlanModel(this.pi, ctx, this.config.implementing.model);
 		if (generation !== this.generation) return { action: "handled" };
 		this.state.pendingLaunch = false;
-		const text = `${phaseMessage(this.state, this.config)}\n\n用户输入：\n${event.text}`;
 		this.save(ctx);
-		return { action: "transform", text, images: event.images };
+		// 只追加规则，不另开一轮；当前这条用户输入保持原文并接着发送。
+		this.sendPhase(phaseMessage(this.state, this.config), { triggerTurn: false });
+		return undefined;
 	}
 
 	private async submit(text: string, ctx: ExtensionContext, signal?: AbortSignal): Promise<PlanResult> {
@@ -208,9 +211,19 @@ export class PlanWorkflow {
 		if (!ctx.isIdle() || ctx.hasPendingMessages()) { this.launching = false; return; }
 		await switchPlanModel(this.pi, ctx, this.config.implementing.model);
 		if (generation !== this.generation || !this.state.pendingLaunch || this.launchCancelled) return;
-		const next = { ...this.state, pendingLaunch: false };
-		this.launchMessage = phaseMessage(next, this.config);
-		this.pi.sendUserMessage(this.launchMessage, { deliverAs: "followUp" });
+		this.state.pendingLaunch = false;
+		this.launchMessage = phaseMessage(this.state, this.config);
+		this.save(ctx);
+		this.sendPhase(this.launchMessage, { deliverAs: "followUp", triggerTurn: true });
+	}
+
+	// sendPhase 把阶段规则写成不显示的自定义消息。它进入模型上下文，但不进聊天和上箭头历史。
+	private sendPhase(content: string, options: { deliverAs?: "steer" | "followUp"; triggerTurn: boolean }): void {
+		this.pi.sendMessage({
+			customType: PLAN_PHASE_MESSAGE,
+			content,
+			display: false,
+		}, options);
 	}
 
 	private save(ctx: ExtensionContext, status: PlanStatus = this.state.phase === "implementing" ? "implementing" : "planning", result?: string): boolean {

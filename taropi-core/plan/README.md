@@ -74,7 +74,7 @@ frontmatter 值按 JSON 字符串、数字和布尔序列化为合法 YAML，正
 - 确认真正收到中断信号时，Pi 本身可能显示 Operation aborted；这不表示 plan 失败或退出。过期会话的决策被忽略，不中断新会话。
 - 恢复只还原阶段、工具策略和 HUD，并提示一次，不自动发模型请求；下一次用户输入沿原阶段继续。
 - `/archive` 或其他方式重建同 id 会话后，若当前 header.timestamp 晚于活动 plan.createdAt，plan 自行标记 exited、清除 pendingLaunch 并保持 idle，正文保留。保存失败时告警且当前仍保持 idle；系统时钟回拨可能漏判。
-- 确认后若在实施提示送达前退出，pendingLaunch=true；恢复后的下一条输入合并一次实施规则、完整计划与用户输入。之后普通输入不再拼接规则。
+- 确认后若在实施提示送达前退出，pendingLaunch=true；恢复后的下一条输入保持原文，实施规则另发一条静默消息插到这次输入之前，并且只补发一次。之后普通输入不再发送规则。
 - 未确认计划依赖 Pi 会话历史恢复调研上下文；Markdown 保留原始任务和最近提交正文。实施中断后先检查已有副作用，不能盲目重放工具。
 - 不迁移旧 `plan-workflow` 会话条目。fork/clone 的 sessionId 不同，不继承活动状态；同一 sessionId 的 tree 分支共享会话级检查点。
 
@@ -102,11 +102,11 @@ frontmatter 值按 JSON 字符串、数字和布尔序列化为合法 YAML，正
 
 ## 缓存边界与验证
 
-每次阶段流转仅下发一次规则：/plan 用户消息、compact 后实施用户消息、complete/exit 工具结果。没有 `before_agent_start`、`context`、`turn_end` 注入，也不更改系统提示或工具列表。
+每次阶段流转仅下发一次规则：进入 /plan 的静默消息、compact 后的静默实施消息、complete/exit 工具结果。规则用 `pi.sendMessage` 写成 `display: false` 的 `taropi-plan-phase` 自定义消息，进入模型上下文，但不显示在聊天里，也不会进上箭头输入历史。没有 `before_agent_start`、`context`、`turn_end` 注入，也不更改系统提示或工具列表。
 
 进入 /plan 切 Au 可能使第一次请求 cache miss；确认后的切 Ag 与 compact 的前缀重建处于同一个阶段边界，但 compact 本身还会产生一次摘要请求。手动切模型也可能 miss。阶段内历史只追加，不保证不同 provider 的实际缓存命中。自动压缩可能摘要掉阶段规则，需要模型主动调用 status。
 
-相邻 Vitest 测试覆盖配置、带上下文短标题、Unicode 上限与压缩边界、文件命名、排他发布／改名、改名冲突及回滚失败、Markdown、流转、取消、失败降级及真实 AgentSession。SDK 使用模拟 provider 与模拟压缩结果，不访问真实用户配置或网络；分别记录标题辅助请求与主会话请求，断言聊到一半切 /plan 时辅助请求包含实际讨论内容但不进入历史，submit 改名后阶段内请求前缀仍只追加、单次实施启动、模型切换和会话恢复。**发布前仍需真实 API 核对 cacheRead，SDK 通过不等于缓存验证通过。**
+相邻 Vitest 测试覆盖配置、带上下文短标题、Unicode 上限与压缩边界、文件命名、排他发布／改名、改名冲突及回滚失败、Markdown、流转、取消、失败降级及真实 AgentSession。SDK 使用模拟 provider 与模拟压缩结果，不访问真实用户配置或网络；分别记录标题辅助请求与主会话请求，断言聊到一半切 /plan 时辅助请求包含实际讨论内容但不进入历史，阶段规则是不显示的自定义消息而不是用户消息，submit 改名后阶段内请求前缀仍只追加、单次实施启动、模型切换和会话恢复。**发布前仍需真实 API 核对 cacheRead，SDK 通过不等于缓存验证通过。**
 
 ## 模块结构
 

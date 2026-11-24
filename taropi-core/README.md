@@ -11,6 +11,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
 | 💬 主动提问 | 内置中文 `ask_user_question`：两层嵌套 Schema 兼容 Gemini，支持单选/多选、自动“输入内容”行、`previews` 分栏 Markdown 预览、备注、折叠与 RPC 降级 |
+| 🔎 一次性查证回答 | `/ask 问题` 只影响这一轮：把查证要求与原问题合成一条用户消息，要求先查证，再用详细例子和文件路径、命令输出或链接回答。它不是 `ask_user_question`，不改系统提示，也不进入或退出 plan |
 | 📋 Plan Workflow | `/plan 任务描述` — 会话级三态（idle / planning / implementing）：只读调研 → 工具内真实用户确认 → 实施；状态与正文保存在同一个 Markdown frontmatter，支持中断、恢复、自然语言退出与手动切模型 |
 | 🎛️ 工具行渲染 | 内置 `pi-compact-tools`，`/compact-tools` 切换 Compact / Claude / Codex / 原生样式，`/silent` 或 `Ctrl+'` 切换静默显示；只改界面，不改工具执行或模型上下文 |
 | 📦 会话归档 | `/archive` — 可带自定义标题，如 `/archive 排查xx问题`；旧内容另存为可搜索恢复的新 id 会话，当前 id、路径和名称保留，上下文清空；活动 plan 自动终止，详见 [归档说明](archive/README.md) |
@@ -106,7 +107,7 @@ Pi 原生 `SYSTEM.md`、`--system-prompt` 或其他扩展的强制完整提示�
 
 ### Plan 工作流（可选）
 
-只有 `/plan` 可以进入计划流程；模型通过固定 `plan` 工具的 status/submit/complete/exit 流转。规划默认 Au，禁止 edit/write；确认后先 compact 再切 Ag 实施，退出后保持当前模型。工具声明和系统提示不随阶段变化，规则仅在流转时发送一次。
+只有 `/plan` 可以进入计划流程；模型通过固定 `plan` 工具的 status/submit/complete/exit 流转。规划默认 Au，禁止 edit/write；确认后先 compact 再切 Ag 实施，退出后保持当前模型。工具声明和系统提示不随阶段变化，规则仅在流转时以不显示的自定义消息发送一次，不进上箭头输入历史。
 
 状态与正文一起写入 `.pi/taropi/plans/` 的 Markdown frontmatter，不另建状态 JSON，也不写会话 custom 条目。中断或恢复后保持阶段，等下一次输入继续；complete/exit 明确结束。旧计划文件不迁移。
 
@@ -220,6 +221,7 @@ core 入口直接注册 npm 依赖 `pi-compact-tools`，无需再单独安装其
 TaroPi/
 ├── taropi-core/
 │   ├── index.ts          # 入口：统一注册所有模块
+│   ├── ask/              # /ask：一次性把查证要求与问题合成用户消息，不改系统提示或 plan 状态
 │   ├── ask-user-question/ # 内置中文 ask_user_question 扩展（两层 Schema + TUI 分栏预览 + RPC 降级）
 │   ├── sub-agents/       # subagent 工具（single / parallel / chain 派发）
 │   ├── plan/             # /plan 三态、Markdown 检查点、工具流转与用户确认

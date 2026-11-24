@@ -63,11 +63,17 @@ async function fixture(cancelCompaction = false, pauseTitle = false) {
 			requests.push({ model: model.id, messages });
 			const step = requests.length;
 			const last = messages.at(-1);
-			const userText = last?.role === "user" ? (typeof last.content === "string" ? last.content : last.content.filter((item) => item.type === "text").map((item) => item.text).join("\n")) : "";
+			const messageText = (message: Message | undefined): string => {
+				if (!message || message.role !== "user") return "";
+				return typeof message.content === "string" ? message.content : message.content.filter((item) => item.type === "text").map((item) => item.text).join("\n");
+			};
+			const userText = messageText(last);
+			const phaseOf = (text: string): string => text.includes("当前阶段：implementing") ? "implementing" : text.includes("当前阶段：planning") ? "planning" : "";
+			const phase = phaseOf(userText) || messages.map(messageText).reduce((current, text) => phaseOf(text) || current, "");
 			let call: ToolCall | undefined;
-			if (userText.includes("当前阶段：planning")) call = { type: "toolCall", id: `blocked-${step}`, name: "write", arguments: { path: "implementation.txt", content: "不应写入" } };
+			if (phaseOf(userText) === "planning") call = { type: "toolCall", id: `blocked-${step}`, name: "write", arguments: { path: "implementation.txt", content: "不应写入" } };
 			else if (userText === "提交计划" || userText === "重新提交" || userText === "批量提交") call = { type: "toolCall", id: `submit-${step}`, name: "plan", arguments: { action: "submit", text: PLAN } };
-			else if (userText.includes("当前阶段：implementing")) call = { type: "toolCall", id: `write-${step}`, name: "write", arguments: { path: "implementation.txt", content: "已实施" } };
+			else if (phase === "implementing" && (phaseOf(userText) === "implementing" || userText === "继续实施")) call = { type: "toolCall", id: `write-${step}`, name: "write", arguments: { path: "implementation.txt", content: "已实施" } };
 			else if (last?.role === "toolResult" && last.toolName === "write" && !last.isError) call = { type: "toolCall", id: `complete-${step}`, name: "plan", arguments: { action: "complete", text: "实现完成，校验通过，无遗留风险" } };
 			else if (userText === "退出 plan") call = { type: "toolCall", id: `exit-${step}`, name: "plan", arguments: { action: "exit" } };
 			const calls = call ? [call] : [];
@@ -220,8 +226,10 @@ describe("真实 AgentSession 缓存与恢复回归", () => {
 			expect(fs.readFileSync(path.join(f.cwd, "implementation.txt"), "utf8")).toBe("已实施");
 			expect(f.compactCount()).toBe(1);
 			expect(session.model?.id).toBe("implementer"); expect(session.getActiveToolNames()).toEqual(tools);
-			const implementationPrompts = f.sessionManager.getEntries().filter((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("当前阶段：implementing"));
-			expect(implementationPrompts).toHaveLength(1);
+			const phaseEntries = (phase: string) => f.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.customType === "taropi-plan-phase" && entry.display === false && JSON.stringify(entry.content).includes(phase));
+			expect(phaseEntries("当前阶段：planning")).toHaveLength(1);
+			expect(phaseEntries("当前阶段：implementing")).toHaveLength(1);
+			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("当前阶段"))).toEqual([]);
 			const changes = f.sessionManager.getEntries().filter((entry) => entry.type === "model_change" && entry.modelId === "implementer");
 			expect(changes).toHaveLength(1);
 			for (const request of f.requests) expect(request.messages.filter((message) => message.role === "system")).toHaveLength(1);
@@ -232,7 +240,7 @@ describe("真实 AgentSession 缓存与恢复回归", () => {
 			expect(JSON.stringify(f.titleRequests[0]!.messages[1])).toContain("已有对话");
 			expect(JSON.stringify(session.messages)).not.toContain("为任务生成简短文件名标题");
 			expect(JSON.stringify(session.messages)).not.toContain('"text":"缓存计划"');
-			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "custom" || entry.type === "custom_message" || entry.type === "context_edit")).toEqual([]);
+			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "custom" || entry.type === "context_edit")).toEqual([]);
 			expect(f.prefixErrors).toEqual([]);
 			expect(f.errors).toEqual([]);
 		} finally { session.dispose(); }
@@ -320,7 +328,8 @@ describe("真实 AgentSession 缓存与恢复回归", () => {
 			expect(fs.readFileSync(path.join(f.cwd, "implementation.txt"), "utf8")).toBe("已实施");
 			expect(findActivePlan(f.cwd, f.sessionManager.getSessionId())).toBeUndefined();
 			expect(f.compactCount()).toBe(1);
-			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("当前阶段：implementing"))).toHaveLength(1);
+			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.display === false && JSON.stringify(entry.content).includes("当前阶段：implementing"))).toHaveLength(1);
+			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("当前阶段"))).toEqual([]);
 			expect(f.prefixErrors).toEqual([]); expect(f.errors).toEqual([]);
 		} finally { session.dispose(); }
 	}, 15000);

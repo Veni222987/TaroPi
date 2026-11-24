@@ -28,7 +28,7 @@ afterEach(() => {
 
 function setup() {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "plan-workflow-")); directories.push(cwd);
-	const api = { sendUserMessage: vi.fn(), setModel: vi.fn(), setActiveTools: vi.fn(), appendEntry: vi.fn(),
+	const api = { sendUserMessage: vi.fn(), sendMessage: vi.fn(), setModel: vi.fn(), setActiveTools: vi.fn(), appendEntry: vi.fn(),
 		registerTool: vi.fn(), registerCommand: vi.fn(), on: vi.fn(), events: createEventBus() };
 	const pi = api as unknown as ExtensionAPI;
 	const notify = vi.fn();
@@ -85,7 +85,7 @@ describe("Plan 注册与三态流转", () => {
 		vi.mocked(generatePlanTitle).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
 		const pending = workflow.enter("原始任务\n所有细节", ctx); await drain();
 		expect(workflow.state.phase).toBe("idle");
-		await workflow.enter("第二个任务", ctx); expect(api.sendUserMessage).not.toHaveBeenCalled();
+		await workflow.enter("第二个任务", ctx); expect(api.sendMessage).not.toHaveBeenCalled();
 		finish!("短标题"); await pending;
 		const file = workflow.state.planFile!;
 		expect(path.basename(file.path)).toMatch(/^短标题-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.md$/);
@@ -146,7 +146,7 @@ describe("Plan 注册与三态流转", () => {
 		await workflow.enter("任务二", ctx);
 		await workflow.input(userInput("先处理别的事情"), ctx);
 		ready!(); await pending; expect(workflow.state.phase).toBe("idle");
-		expect(api.sendUserMessage).not.toHaveBeenCalled();
+		expect(api.sendMessage).not.toHaveBeenCalled();
 	});
 	it("会话切换使标题请求失效，旧结果不得创建文件或解锁新请求", async () => {
 		const { workflow, ctx, api, cwd } = setup();
@@ -164,7 +164,7 @@ describe("Plan 注册与三态流转", () => {
 		finishNext!("新标题"); await nextPending;
 		expect(findActivePlan(cwd, "session-a")).toBeUndefined();
 		expect(workflow.state.planFile?.metadata.sessionId).toBe("session-b");
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(api.sendMessage).toHaveBeenCalledTimes(1);
 		expect(fs.readdirSync(path.dirname(workflow.state.planFile!.path))).toHaveLength(1);
 	});
 	it.each(["exists", "failed"] as const)("首次发布 %s 时保持 idle，不切模型或发送规划消息", async (result) => {
@@ -172,7 +172,7 @@ describe("Plan 注册与三态流转", () => {
 		vi.spyOn(fileModule, "publishPlanFile").mockReturnValueOnce(result);
 		await workflow.enter("任务", ctx);
 		expect(workflow.state.phase).toBe("idle"); expect(workflow.state.planFile).toBeUndefined();
-		expect(api.sendUserMessage).not.toHaveBeenCalled(); expect(switchPlanModel).not.toHaveBeenCalled();
+		expect(api.sendMessage).not.toHaveBeenCalled(); expect(switchPlanModel).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining(result === "exists" ? "同一分钟" : "创建失败"), "warning");
 	});
 	it("标题取消保持 idle，已完成或退出的同分钟文件也拒绝覆盖", async () => {
@@ -180,22 +180,25 @@ describe("Plan 注册与三态流转", () => {
 		const { workflow, ctx, api, notify } = setup();
 		vi.mocked(generatePlanTitle).mockResolvedValueOnce(undefined);
 		await workflow.enter("任务", ctx); expect(workflow.state.phase).toBe("idle");
-		expect(api.sendUserMessage).not.toHaveBeenCalled();
+		expect(api.sendMessage).not.toHaveBeenCalled();
 		await workflow.enter("任务", ctx);
 		const file = workflow.state.planFile!.path;
 		await workflow.dispatch({ action: "exit" }, ctx);
 		const before = fs.readFileSync(file, "utf8");
 		await workflow.enter("任务", ctx);
-		expect(workflow.state.phase).toBe("idle"); expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(workflow.state.phase).toBe("idle"); expect(api.sendMessage).toHaveBeenCalledTimes(1);
 		expect(fs.readFileSync(file, "utf8")).toBe(before);
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("同一分钟"), "warning");
 	});
 	it("idle 的流转请求失败，入口立刻持久化，重复入口不重发提示", async () => {
-		const { workflow, ctx, api, cwd } = setup();
+		const { workflow, ctx, api, compact, cwd } = setup();
 		for (const action of ["submit", "complete", "exit"] as const) await expect(workflow.dispatch({ action, text: PLAN }, ctx)).rejects.toThrow("只有用户执行 /plan");
 		await workflow.enter("", ctx); expect(workflow.state.phase).toBe("idle");
 		await workflow.enter("任务", ctx); await workflow.enter("重复任务", ctx);
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(api.sendMessage).toHaveBeenCalledTimes(1);
+		expect(api.sendUserMessage).not.toHaveBeenCalled();
+		expect(api.sendMessage.mock.calls[0]?.[0]).toMatchObject({ customType: "taropi-plan-phase", display: false });
+		expect(compact).not.toHaveBeenCalled();
 		expect(findActivePlan(cwd, "session-a")?.file.metadata.status).toBe("planning");
 		expect(workflow.blockReason("write")).toContain("仅可读");
 		expect(workflow.blockReason("edit")).toBeDefined(); expect(workflow.blockReason("bash")).toBeUndefined();
@@ -208,8 +211,10 @@ describe("Plan 注册与三态流转", () => {
 		workflow.settled(ctx, false); workflow.settled(ctx, false);
 		expect(compact).toHaveBeenCalledTimes(1);
 		compact.mock.calls[0]?.[0]?.onComplete?.({ summary: "摘要", firstKeptEntryId: "entry", tokensBefore: 1 }); await drain();
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(2);
-		const text = api.sendUserMessage.mock.calls[1]![0] as string;
+		expect(api.sendUserMessage).not.toHaveBeenCalled();
+		expect(api.sendMessage).toHaveBeenCalledTimes(2);
+		expect(api.sendMessage.mock.calls[1]?.[1]).toMatchObject({ deliverAs: "followUp", triggerTurn: true });
+		const text = (api.sendMessage.mock.calls[1]![0] as { content: string }).content;
 		await workflow.input({ type: "input", source: "extension", text }, ctx);
 		expect(workflow.blockReason("write")).toBeUndefined();
 		expect(findActivePlan(cwd, "session-a")?.file.metadata.pendingLaunch).toBe(false);
@@ -243,7 +248,7 @@ describe("Plan 注册与三态流转", () => {
 		expect(workflow.blockReason("write")).toBeDefined(); expect(ctx.abort).toHaveBeenCalledTimes(1);
 		workflow.settled(ctx, true); workflow.restore(ctx); workflow.settled(ctx, false);
 		expect(await workflow.input({ ...userInput("新的补充"), images: [{ type: "image", data: "a", mimeType: "image/png" }] }, ctx)).toBeUndefined();
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(1); expect(compact).not.toHaveBeenCalled();
+		expect(api.sendMessage).toHaveBeenCalledTimes(1); expect(compact).not.toHaveBeenCalled();
 		expect(vi.mocked(switchPlanModel).mock.calls.map((call) => call[2])).toEqual(["Au"]);
 	});
 	it("已取消操作和确认中断不抛异常，即使 UI 同时返回实施也不启动", async () => {
@@ -272,20 +277,23 @@ describe("Plan 注册与三态流转", () => {
 		await workflow.dispatch({ action: "submit", text: PLAN }, ctx);
 		workflow.invalidate(); workflow.restore(ctx); workflow.settled(ctx, false);
 		expect(compact).not.toHaveBeenCalled();
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(api.sendMessage).toHaveBeenCalledTimes(1);
 		expect(await workflow.input({ type: "input", source: "extension", text: "其他扩展自动续跑" }, ctx)).toBeUndefined();
 		expect(workflow.state.pendingLaunch).toBe(true);
 		const event = { ...userInput("继续"), images: [{ type: "image" as const, data: "a", mimeType: "image/png" }] };
-		const result = await workflow.input(event, ctx);
-		expect(result).toMatchObject({ action: "transform", images: event.images });
-		expect(result && "text" in result ? result.text : "").toContain(PLAN);
+		expect(await workflow.input(event, ctx)).toBeUndefined();
+		expect(workflow.state.pendingLaunch).toBe(false);
+		expect(api.sendMessage).toHaveBeenCalledTimes(2);
+		expect(api.sendMessage.mock.calls[1]?.[0]).toMatchObject({ display: false, content: expect.stringContaining(PLAN) });
+		expect(api.sendMessage.mock.calls[1]?.[1]).toMatchObject({ triggerTurn: false });
 		expect(await workflow.input(userInput("再继续"), ctx)).toBeUndefined();
+		expect(api.sendMessage).toHaveBeenCalledTimes(2);
 	});
 	it("压缩失败可以降级启动，用户取消则保持 pendingLaunch", async () => {
 		const { workflow, ctx, compact, api } = setup(); await workflow.enter("任务", ctx);
 		await workflow.dispatch({ action: "submit", text: PLAN }, ctx); workflow.settled(ctx, false);
 		workflow.compactFailed(true); compact.mock.calls[0]?.[0]?.onError?.(new Error("取消")); await drain();
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(1); expect(workflow.state.pendingLaunch).toBe(true);
+		expect(api.sendMessage).toHaveBeenCalledTimes(1); expect(workflow.state.pendingLaunch).toBe(true);
 		await workflow.input(userInput("继续"), ctx); expect(workflow.state.pendingLaunch).toBe(false);
 	});
 	it("非取消压缩失败告警后启动；启动前 complete 不能冒充完成", async () => {
@@ -293,7 +301,7 @@ describe("Plan 注册与三态流转", () => {
 		await workflow.dispatch({ action: "submit", text: PLAN }, ctx);
 		await expect(workflow.dispatch({ action: "complete", text: "提前完成" }, ctx)).rejects.toThrow("已启动");
 		workflow.settled(ctx, false); compact.mock.calls[0]?.[0]?.onError?.(new Error("provider 不可用")); await drain();
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(2);
+		expect(api.sendMessage).toHaveBeenCalledTimes(2);
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("压缩失败"), "warning");
 	});
 	it("旧会话的压缩、模型切换及确认回调不能污染新会话", async () => {
@@ -306,7 +314,7 @@ describe("Plan 注册与三态流转", () => {
 		expect(ctx.abort).not.toHaveBeenCalled(); expect(workflow.state.phase).toBe("planning");
 		await workflow.dispatch({ action: "submit", text: PLAN }, ctx); workflow.settled(ctx, false);
 		workflow.invalidate(); compact.mock.calls[0]?.[0]?.onError?.(new Error("失败")); await drain();
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(api.sendMessage).toHaveBeenCalledTimes(1);
 	});
 	it("切到新会话后，旧确认结果不报失败、不修改或中断新计划", async () => {
 		const { workflow, ctx, select } = setup(); await workflow.enter("旧任务", ctx);
@@ -329,7 +337,7 @@ describe("Plan 注册与三态流转", () => {
 		workflow.settled(ctx, false);
 		compact.mock.calls[0]?.[0]?.onComplete?.({ summary: "摘要", firstKeptEntryId: "entry", tokensBefore: 1 });
 		await workflow.dispatch({ action: "exit" }, ctx); switched?.(); await drain();
-		expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(api.sendMessage).toHaveBeenCalledTimes(1);
 		expect(workflow.state.phase).toBe("idle");
 	});
 	it("每阶段独立工具策略、无 UI、写入失败安全降级", async () => {
