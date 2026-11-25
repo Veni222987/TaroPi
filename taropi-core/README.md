@@ -11,7 +11,7 @@ TaroPi 整合包，一个入口加载所有核心能力。
 | 🔧 Debugger sub-agent | `/debugger` / `#debugger` — 专门定位和修复 bug |
 | 🏗️ Developer sub-agent | `/developer` / `#developer` — 功能开发和代码重构 |
 | 💬 主动提问 | 内置中文 `ask_user_question`：两层嵌套 Schema 兼容 Gemini，支持单选/多选、自动“输入内容”行、`previews` 分栏 Markdown 预览、备注、折叠与 RPC 降级 |
-| 🔎 一次性查证回答 | `/ask 问题` 只影响这一轮：把查证要求与原问题合成一条用户消息，要求先查证，再用详细例子和文件路径、命令输出或链接回答。它不是 `ask_user_question`，不改系统提示，也不进入或退出 plan |
+| 🔎 一次性查证回答 | `/ask 问题` 只影响这一轮：把查证要求与原问题合成一条用户消息，要求先查证，按“总览 + 逐环拆解（步骤说明、详细例子、可核对证据）”回答。它不是 `ask_user_question`，不改系统提示，也不进入或退出 plan |
 | 📋 Plan Workflow | `/plan 任务描述` — 会话级三态（idle / planning / implementing）：只读调研 → 工具内真实用户确认 → 实施；状态与正文保存在同一个 Markdown frontmatter，支持中断、恢复、自然语言退出与手动切模型 |
 | 🎛️ 工具行渲染 | 内置 `pi-compact-tools`，`/compact-tools` 切换 Compact / Claude / Codex / 原生样式，`/silent` 或 `Ctrl+'` 切换静默显示；只改界面，不改工具执行或模型上下文 |
 | 📦 会话归档 | `/archive` — 可带自定义标题，如 `/archive 排查xx问题`；旧内容另存为可搜索恢复的新 id 会话，当前 id、路径和名称保留，上下文清空；活动 plan 自动终止，详见 [归档说明](archive/README.md) |
@@ -47,9 +47,26 @@ make test
 
 `taropi-core` 在扩展初始化和 `session_start` 时读取 `getAgentDir()/PREAMBLE.md`，默认即 `~/.pi/agent/PREAMBLE.md`，并遵循 `PI_CODING_AGENT_DIR`。文件由用户自己创建和维护，仓库不提供模板；缺失、空白或无法读取时保持 Pi 默认角色文本。普通请求只使用已加载的缓存，修改后重启 Pi 或执行 `/reload` 生效。
 
+```bash
+mkdir -p ~/.pi/agent
+$EDITOR ~/.pi/agent/PREAMBLE.md
+```
+
 该文件是 TaroPi 的扩展约定，不是 Pi 原生 SYSTEM 机制。它仅在请求阶段替换结构化 `preamble` 区块，不改变工具定义、工具可用性、工具摘要、规则、Pi 文档指引、skills、项目上下文、当前工作目录或 `APPEND_SYSTEM.md`。
 
-Pi 原生 `SYSTEM.md`、`--system-prompt` 或其他扩展的强制完整提示词优先；发生冲突时，本模块跳过替换并给出一次提示。删除或移走 PREAMBLE 后 `/reload`，即可恢复 Pi 默认角色。
+Pi 原生 `SYSTEM.md`、`--system-prompt` 或其他扩展的强制完整提示词优先；发生冲突时，本模块跳过替换并给出一次提示。删除或移走 PREAMBLE 后 `/reload`，即可恢复 Pi 默认角色：
+
+```bash
+mv ~/.pi/agent/PREAMBLE.md ~/.pi/agent/PREAMBLE.md.backup
+```
+
+未配置 PREAMBLE 时，Pi 的默认前导角色文本为：
+
+```text
+You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+```
+
+其后的工具摘要、规则、文档指引、skills、项目上下文和当前工作目录均由 Pi 在运行时动态生成。
 
 ### 模型别名与默认模型
 

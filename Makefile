@@ -1,6 +1,5 @@
 .PHONY: test release
 
-PACKAGE ?= taropi-core
 REMOTE ?= origin
 MESSAGE ?=
 
@@ -8,14 +7,16 @@ MESSAGE ?=
 test:
 	npm run test:coverage
 
-# release 先拉取当前分支以暴露冲突，再递增指定 workspace 的补丁版本，提交当前工作区内容和可选发布消息，并推送当前 GitHub 分支。
+# release 先拉取当前分支以暴露冲突，再递增最外围补丁版本；仅当 workspace 在递增前已有未提交改动时同步递增其补丁版本，提交当前工作区并推送当前 GitHub 分支。
 release:
-	@case "$(PACKAGE)" in taropi-core|taropi-hud) ;; *) echo "不支持的 PACKAGE: $(PACKAGE)"; exit 1;; esac
-	@branch="$$(git branch --show-current)"; test -n "$$branch" || { echo "当前不在分支上，无法发布。"; exit 1; }; \
+	@set -eu; \
+	branch="$$(git branch --show-current)"; test -n "$$branch" || { echo "当前不在分支上，无法发布。"; exit 1; }; \
 	remote_url="$$(git remote get-url "$(REMOTE)")"; case "$$remote_url" in *github.com*) ;; *) echo "$(REMOTE) 不是 GitHub 远端：$$remote_url"; exit 1;; esac; \
 	git pull --autostash --no-edit "$(REMOTE)" "$$branch" || { echo "拉取失败或存在冲突，已停止发布。"; exit 1; }; \
-	npm version patch --workspace="$(PACKAGE)" --no-git-tag-version --ignore-scripts; \
-	version="$$(node -p "require('./$(PACKAGE)/package.json').version")"; \
+	changed_workspaces="$$(node -e 'const fs=require("node:fs"); const {execFileSync}=require("node:child_process"); const names=JSON.parse(fs.readFileSync("package.json","utf8")).workspaces??[]; for (const name of names) { if (!fs.existsSync(name+"/package.json")) continue; const output=execFileSync("git",["status","--porcelain","--untracked-files=all","--",name+"/"],{encoding:"utf8"}); if (output.trim()) process.stdout.write(name+"\n"); }')"; \
+	npm version patch --no-git-tag-version --ignore-scripts; \
+	for workspace in $$changed_workspaces; do npm version patch --workspace="$$workspace" --no-git-tag-version --ignore-scripts; done; \
+	version="$$(node -p "require('./package.json').version")"; \
 	git add -A; \
 	commit_message="release v$$version"; \
 	if test -n "$(MESSAGE)"; then commit_message="$$commit_message $(MESSAGE)"; fi; \

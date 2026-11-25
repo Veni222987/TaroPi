@@ -4,42 +4,31 @@
 
 A personal collection of [pi coding agent](https://pi.dev) extensions (monorepo).
 
-## Architecture
-
-```mermaid
-flowchart LR
-  PI[pi coding agent]
-  CORE[taropi-core\ncore extension]
-  PLAIN[taropi-plain\nagents and skills]
-
-  PI --> CORE
-  PI --> PLAIN
-  CORE -.loads bundled agent definitions.-> PLAIN
-```
-
 ## Install
 
 ```bash
-pi install ./
+pi install git:git@github.com:Veni222987/TaroPi.git
 ```
 
-Or manually add to `~/.pi/agent/settings.json`:
+pi clones the repository and runs `npm install`, so all dependencies are ready.
+
+Or add it manually to `~/.pi/agent/settings.json`:
 
 ```json
 {
   "packages": [
-    "/path/to/TaroPi"
+    "git:git@github.com:Veni222987/TaroPi.git"
   ]
 }
 ```
 
 Run `/reload` or restart pi after installation.
 
-## Bundled Extensions
+## Packages
 
 | Package | Description |
 |---------|-------------|
-| `taropi-core` | Core: subagent tools, permission control, Chinese response, web access, etc. |
-| `taropi-plain` | Plain-text resources: subagent definitions and skills |
-
-
+| [`taropi-core`](./taropi-core/README.md) | Core bundle: global role text, subagents, permissions, web access, user questions, and the plan workflow |
+| [`taropi-hud`](./taropi-hud/README.md) | Extensible HUD host: status panel, `/hud-fresh`, and the external panel API |
+| [`taropi-plain`](./taropi-plain/skills) | Plain-text resources: agents and skills |
+| [`taropi-life`](./taropi-life/README.md) | Everyday skills, such as the Genshin daily check-in |

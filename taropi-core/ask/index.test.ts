@@ -48,9 +48,11 @@ describe("/ask 一次性查证回答", () => {
 		await command.handler(question, {} as ExtensionCommandContext);
 		expect(api.sendUserMessage).toHaveBeenCalledTimes(1);
 		const [message, options] = vi.mocked(api.sendUserMessage).mock.calls[0]!;
-		expect(message).toContain("1. 结论");
-		expect(message).toContain("2. 至少一个可核对的详细例子");
-		expect(message).toContain("3. 相关证据");
+		expect(message).toContain("1. 总览：");
+		expect(message).toContain("2. 分步拆解（按步骤或模块循环展开，每一步都成套给出）：");
+		expect(message).toContain("步骤说明：");
+		expect(message).toContain("详细例子：");
+		expect(message).toContain("相关证据：");
 		expect(message).toContain(`问题：\n${question.trim()}`);
 		expect(options).toEqual({ expandPromptTemplates: false });
 	});
