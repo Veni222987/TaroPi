@@ -5,9 +5,9 @@ export type AliasTier = "Au" | "Ag" | "Cu";
 
 /** 档位显示名 */
 export const TIER_LABEL: Record<AliasTier, string> = {
-  Au: "🥇 Aurum (金)",
-  Ag: "🥈 Argentum (银)",
-  Cu: "🥉 Cuprum (铜)",
+  Au: "🥇 Aurum",
+  Ag: "🥈 Argentum",
+  Cu: "🥉 Cuprum",
 };
 
 /** 档位别名全称映射 */
