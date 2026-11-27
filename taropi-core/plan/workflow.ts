@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InputEvent, InputEventResult } from "@earendil-works/pi-coding-agent";
+import { sendCommandPrompt, type CommandPromptDetails } from "../command-prompt/index.ts";
 import { loadPlanConfig } from "./config.ts";
 import { createPlanFile, findActivePlan, hasPlanSteps, publishPlanFile, renamePlanFile, savePlanFile } from "./file.ts";
 import { phaseMessage } from "./prompts.ts";
@@ -7,7 +8,8 @@ import { generatePlanTitle } from "./title.ts";
 import { showPlanDecision } from "./tui.ts";
 import type { PlanConfig, PlanRequest, PlanResult, PlanStatus, WorkflowState } from "./types.ts";
 
-const PLAN_PHASE_MESSAGE = "taropi-plan-phase";
+export const PLAN_PHASE_MESSAGE = "taropi-plan-phase";
+const LAUNCH_STATUS = "🧭 plan 已进入实施阶段";
 
 // PlanWorkflow 管理会话检查点及一次性阶段启动，不接管每轮模型上下文。
 export class PlanWorkflow {
@@ -17,7 +19,6 @@ export class PlanWorkflow {
 	private autoLaunch = false;
 	private launchCancelled = false;
 	private launching = false;
-	private launchMessage: string | undefined;
 	private entering: AbortController | undefined;
 
 	constructor(private readonly pi: ExtensionAPI, private readonly render: () => void) {}
@@ -51,7 +52,6 @@ export class PlanWorkflow {
 		this.entering = undefined;
 		this.autoLaunch = false;
 		this.launching = false;
-		this.launchMessage = undefined;
 	}
 
 	// enter 仅供用户 /plan 调用，标题生成与首次排他创建成功后才进入 planning。
@@ -81,7 +81,7 @@ export class PlanWorkflow {
 			this.render();
 			await switchPlanModel(this.pi, ctx, this.config.planning.model);
 			if (generation !== this.generation) return;
-			this.sendPhase(phaseMessage(this.state, this.config), { triggerTurn: true });
+			this.sendPhase(phaseMessage(this.state, this.config), { input: `/plan ${this.state.task}` }, { triggerTurn: true });
 		} catch (error) {
 			if (generation === this.generation && !controller.signal.aborted) ctx.ui.notify(`计划创建未完成：${String(error)}`, "warning");
 		} finally {
@@ -151,13 +151,6 @@ export class PlanWorkflow {
 	async input(event: InputEvent, ctx: ExtensionContext): Promise<InputEventResult | undefined> {
 		if (this.entering && event.source !== "extension") this.invalidate();
 		if (!this.state.pendingLaunch) return undefined;
-		if (event.source === "extension" && event.text === this.launchMessage) {
-			this.state.pendingLaunch = false;
-			this.launching = false;
-			this.launchMessage = undefined;
-			this.save(ctx);
-			return undefined;
-		}
 		if (event.source === "extension") return undefined;
 		// 新输入接管恢复，旧压缩或切换回调不得再次发送实施提示。
 		this.invalidate();
@@ -167,7 +160,7 @@ export class PlanWorkflow {
 		this.state.pendingLaunch = false;
 		this.save(ctx);
 		// 只追加规则，不另开一轮；当前这条用户输入保持原文并接着发送。
-		this.sendPhase(phaseMessage(this.state, this.config), { triggerTurn: false });
+		this.sendPhase(phaseMessage(this.state, this.config), { status: LAUNCH_STATUS }, { triggerTurn: false });
 		return undefined;
 	}
 
@@ -212,18 +205,13 @@ export class PlanWorkflow {
 		await switchPlanModel(this.pi, ctx, this.config.implementing.model);
 		if (generation !== this.generation || !this.state.pendingLaunch || this.launchCancelled) return;
 		this.state.pendingLaunch = false;
-		this.launchMessage = phaseMessage(this.state, this.config);
 		this.save(ctx);
-		this.sendPhase(this.launchMessage, { deliverAs: "followUp", triggerTurn: true });
+		this.sendPhase(phaseMessage(this.state, this.config), { status: LAUNCH_STATUS }, { deliverAs: "followUp", triggerTurn: true });
 	}
 
-	// sendPhase 把阶段规则写成不显示的自定义消息。它进入模型上下文，但不进聊天和上箭头历史。
-	private sendPhase(content: string, options: { deliverAs?: "steer" | "followUp"; triggerTurn: boolean }): void {
-		this.pi.sendMessage({
-			customType: PLAN_PHASE_MESSAGE,
-			content,
-			display: false,
-		}, options);
+	// sendPhase 把阶段规则写成模型可见消息，界面由渲染器只显示原始输入或一行状态。
+	private sendPhase(content: string, details: CommandPromptDetails, options: { deliverAs?: "steer" | "followUp"; triggerTurn: boolean }): void {
+		sendCommandPrompt(this.pi, PLAN_PHASE_MESSAGE, content, details, options);
 	}
 
 	private save(ctx: ExtensionContext, status: PlanStatus = this.state.phase === "implementing" ? "implementing" : "planning", result?: string): boolean {

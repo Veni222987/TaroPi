@@ -1,4 +1,5 @@
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { readCommandInput } from "../command-prompt/index.ts";
 import { safeFileNamePart } from "./file-name.ts";
 
 const TITLE_TIMEOUT_MS = 15_000;
@@ -48,6 +49,10 @@ export function titleInput(task: string, entries: readonly SessionEntry[], taskL
 		const entry = entries[index]!;
 		let text = "";
 		if (entry.type === "branch_summary") text = `分支摘要：\n${entry.summary}`;
+		else if (entry.type === "custom_message") {
+			const input = readCommandInput(entry.details);
+			if (input) text = `用户：\n${input}`;
+		}
 		else if (entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant")) {
 			const content = entry.message.content;
 			const visible = typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("\n");

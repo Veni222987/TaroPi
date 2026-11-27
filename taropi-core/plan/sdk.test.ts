@@ -226,9 +226,11 @@ describe("真实 AgentSession 缓存与恢复回归", () => {
 			expect(fs.readFileSync(path.join(f.cwd, "implementation.txt"), "utf8")).toBe("已实施");
 			expect(f.compactCount()).toBe(1);
 			expect(session.model?.id).toBe("implementer"); expect(session.getActiveToolNames()).toEqual(tools);
-			const phaseEntries = (phase: string) => f.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.customType === "taropi-plan-phase" && entry.display === false && JSON.stringify(entry.content).includes(phase));
+			const phaseEntries = (phase: string) => f.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.customType === "taropi-plan-phase" && entry.display === true && JSON.stringify(entry.content).includes(phase));
 			expect(phaseEntries("当前阶段：planning")).toHaveLength(1);
+			expect(phaseEntries("当前阶段：planning")[0]).toMatchObject({ details: { input: expect.stringMatching(/^\/plan /) } });
 			expect(phaseEntries("当前阶段：implementing")).toHaveLength(1);
+			expect(phaseEntries("当前阶段：implementing")[0]).toMatchObject({ details: { status: "🧭 plan 已进入实施阶段" } });
 			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("当前阶段"))).toEqual([]);
 			const changes = f.sessionManager.getEntries().filter((entry) => entry.type === "model_change" && entry.modelId === "implementer");
 			expect(changes).toHaveLength(1);
@@ -328,7 +330,7 @@ describe("真实 AgentSession 缓存与恢复回归", () => {
 			expect(fs.readFileSync(path.join(f.cwd, "implementation.txt"), "utf8")).toBe("已实施");
 			expect(findActivePlan(f.cwd, f.sessionManager.getSessionId())).toBeUndefined();
 			expect(f.compactCount()).toBe(1);
-			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.display === false && JSON.stringify(entry.content).includes("当前阶段：implementing"))).toHaveLength(1);
+			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.display === true && JSON.stringify(entry.content).includes("当前阶段：implementing"))).toHaveLength(1);
 			expect(f.sessionManager.getEntries().filter((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("当前阶段"))).toEqual([]);
 			expect(f.prefixErrors).toEqual([]); expect(f.errors).toEqual([]);
 		} finally { session.dispose(); }

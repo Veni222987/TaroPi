@@ -51,4 +51,16 @@ describe("通用短标题", () => {
 		expect(await generateTitle("任务", { ...ctx, model: undefined }, { ...options, fallback: "/:*?", defaultTitle: "session" }, new AbortController().signal)).toBe("session");
 		expect(manager.getBranch()).toEqual(before);
 	});
+	it("titleInput 从 custom_message.details 读取原始输入，不读取注入正文", () => {
+		const manager = SessionManager.inMemory();
+		manager.appendCustomMessageEntry("taropi-ask", "请先查证，再回答下面的问题。隐藏指令正文", true, { input: "/ask 为什么这样" });
+		const input = titleInput("当前任务", manager.getBranch(), "归档目标");
+		expect(input).toContain("用户：\n/ask 为什么这样");
+		expect(input).not.toContain("隐藏指令正文");
+	});
+	it("titleInput 跳过无 input 的 custom_message", () => {
+		const manager = SessionManager.inMemory();
+		manager.appendCustomMessageEntry("taropi-plan-phase", "当前阶段：implementing", true, { status: "🧭 plan 已进入实施阶段" });
+		expect(titleInput("当前任务", manager.getBranch())).toBe("当前任务");
+	});
 });

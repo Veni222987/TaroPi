@@ -1,10 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHudClient } from "taropi-hud/api";
+import { registerCommandPromptRenderer } from "../command-prompt/index.ts";
 import { registerPlanTool } from "./tool.ts";
-import { PlanWorkflow } from "./workflow.ts";
+import { PLAN_PHASE_MESSAGE, PlanWorkflow } from "./workflow.ts";
 
 // registerPlan 注册唯一入口 /plan、固定流转工具及会话恢复，不改写历史或工具声明。
 export default function registerPlan(pi: ExtensionAPI): void {
+	registerCommandPromptRenderer(pi, PLAN_PHASE_MESSAGE);
 	const hud = createHudClient(pi);
 	const workflow = new PlanWorkflow(pi, () => hud.render());
 	hud.register({

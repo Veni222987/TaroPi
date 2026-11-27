@@ -29,7 +29,7 @@ afterEach(() => {
 function setup() {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "plan-workflow-")); directories.push(cwd);
 	const api = { sendUserMessage: vi.fn(), sendMessage: vi.fn(), setModel: vi.fn(), setActiveTools: vi.fn(), appendEntry: vi.fn(),
-		registerTool: vi.fn(), registerCommand: vi.fn(), on: vi.fn(), events: createEventBus() };
+		registerTool: vi.fn(), registerCommand: vi.fn(), registerMessageRenderer: vi.fn(), on: vi.fn(), events: createEventBus() };
 	const pi = api as unknown as ExtensionAPI;
 	const notify = vi.fn();
 	const select = vi.fn<ExtensionContext["ui"]["select"]>(async () => "开始实施");
@@ -73,6 +73,7 @@ describe("Plan 注册与三态流转", () => {
 	it("工具声明固定，只有 /plan 命令能进入，禁止上下文注入和会话存状态", () => {
 		const { api } = setup(); registerPlan(api as unknown as ExtensionAPI);
 		expect(api.registerCommand.mock.calls[0]?.[0]).toBe("plan");
+		expect(api.registerMessageRenderer.mock.calls.map(([name]) => name)).toEqual(["taropi-plan-phase"]);
 		const tool = api.registerTool.mock.calls[0]?.[0];
 		expect(tool).toMatchObject({ name: "plan", exposure: "model-only", executionMode: "sequential" });
 		expect(tool.parameters.properties.action.enum).toEqual(["status", "submit", "complete", "exit"]);
@@ -197,7 +198,7 @@ describe("Plan 注册与三态流转", () => {
 		await workflow.enter("任务", ctx); await workflow.enter("重复任务", ctx);
 		expect(api.sendMessage).toHaveBeenCalledTimes(1);
 		expect(api.sendUserMessage).not.toHaveBeenCalled();
-		expect(api.sendMessage.mock.calls[0]?.[0]).toMatchObject({ customType: "taropi-plan-phase", display: false });
+		expect(api.sendMessage.mock.calls[0]?.[0]).toMatchObject({ customType: "taropi-plan-phase", display: true, details: { input: "/plan 任务" } });
 		expect(compact).not.toHaveBeenCalled();
 		expect(findActivePlan(cwd, "session-a")?.file.metadata.status).toBe("planning");
 		expect(workflow.blockReason("write")).toContain("仅可读");
@@ -214,8 +215,7 @@ describe("Plan 注册与三态流转", () => {
 		expect(api.sendUserMessage).not.toHaveBeenCalled();
 		expect(api.sendMessage).toHaveBeenCalledTimes(2);
 		expect(api.sendMessage.mock.calls[1]?.[1]).toMatchObject({ deliverAs: "followUp", triggerTurn: true });
-		const text = (api.sendMessage.mock.calls[1]![0] as { content: string }).content;
-		await workflow.input({ type: "input", source: "extension", text }, ctx);
+		expect(api.sendMessage.mock.calls[1]?.[0]).toMatchObject({ display: true, details: { status: "🧭 plan 已进入实施阶段" } });
 		expect(workflow.blockReason("write")).toBeUndefined();
 		expect(findActivePlan(cwd, "session-a")?.file.metadata.pendingLaunch).toBe(false);
 		await expect(workflow.dispatch({ action: "complete" }, ctx)).rejects.toThrow("摘要");
@@ -284,7 +284,7 @@ describe("Plan 注册与三态流转", () => {
 		expect(await workflow.input(event, ctx)).toBeUndefined();
 		expect(workflow.state.pendingLaunch).toBe(false);
 		expect(api.sendMessage).toHaveBeenCalledTimes(2);
-		expect(api.sendMessage.mock.calls[1]?.[0]).toMatchObject({ display: false, content: expect.stringContaining(PLAN) });
+		expect(api.sendMessage.mock.calls[1]?.[0]).toMatchObject({ display: true, content: expect.stringContaining(PLAN), details: { status: "🧭 plan 已进入实施阶段" } });
 		expect(api.sendMessage.mock.calls[1]?.[1]).toMatchObject({ triggerTurn: false });
 		expect(await workflow.input(userInput("再继续"), ctx)).toBeUndefined();
 		expect(api.sendMessage).toHaveBeenCalledTimes(2);
